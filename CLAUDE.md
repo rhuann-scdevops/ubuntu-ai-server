@@ -55,6 +55,7 @@ base-system
 security (can run independently)
 mcp-servers (requires docker-setup)
 rag-stack (requires docker-setup, ai-stack)
+langchain-service (requires docker-setup, ai-stack, rag-stack)
 n8n (requires docker-setup)
 docs-generator (requires docker-setup, rag-stack)
 ```
@@ -136,6 +137,7 @@ docker run --rm --gpus all nvidia/cuda:12.2-base-ubuntu22.04 nvidia-smi
 | 8087 | RAG Ingestion |
 | 5678 | n8n UI |
 | 5679 | n8n Webhooks |
+| 8002 | LangChain API |
 | 8088 | MkDocs Site |
 | 8089 | Docs API |
 
@@ -252,6 +254,110 @@ ansible-playbook site.yml --tags "docs,docs-generator"
 # Full deployment with all phases
 ansible-playbook site.yml
 ```
+
+## LangChain Service
+
+Unified LangChain API service for RAG pipelines, autonomous agents, and conversation management.
+
+### Components
+- **RAG Chains**: Document-based Q&A with Qdrant using LCEL
+- **Conversational RAG**: RAG with chat history support
+- **Agents**: DevOps and NOC expert agents
+- **Q&A Chains**: General, NOC expert, and code analysis
+- **Summary Chains**: Document, log, and config summarization
+- **Memory Management**: Buffer, window, summary, and hybrid memory types
+
+### API Endpoints
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Service health check |
+| `/info` | GET | Service configuration |
+| `/chat` | POST | Simple Q&A |
+| `/chat/stream` | POST | Streaming chat |
+| `/rag/query` | POST | RAG document Q&A |
+| `/rag/conversational` | POST | Conversational RAG |
+| `/agent/run` | POST | Execute agent task |
+| `/agent/troubleshoot` | POST | NOC troubleshooting workflow |
+| `/summarize` | POST | Text summarization |
+| `/summarize/log` | POST | Log analysis |
+| `/summarize/config` | POST | Config analysis |
+| `/memory/create` | POST | Create memory session |
+| `/memory/{id}/history` | GET | Get conversation history |
+| `/conversations` | GET | List stored conversations |
+
+### Model Configurations
+| Config | Model | Temperature | Use Case |
+|--------|-------|-------------|----------|
+| `general` | llama3.2:3b | 0.7 | General conversations |
+| `code` | codellama:13b | 0.2 | Code generation |
+| `noc` | llama3.2:3b | 0.3 | NOC assistance |
+| `reasoning` | mistral:7b | 0.1 | Complex reasoning |
+| `fast` | llama3.2:3b | 0.5 | Quick responses |
+
+### Collection Mappings
+| Collection | Purpose |
+|------------|---------|
+| `langchain_manuals` | Technical documentation |
+| `langchain_confluence` | Wiki content |
+| `langchain_logs` | Log files |
+| `langchain_configs` | Configuration files |
+| `langchain_code` | Source code |
+| `langchain_general` | General purpose |
+
+### Storage Paths
+| Path | Purpose |
+|------|---------|
+| `/fast-pool/docker/langchain/` | Service data |
+| `/fast-pool/docker/langchain/build/` | Application code |
+| `/fast-pool/docker/langchain/conversations/` | Stored conversations |
+
+### Deployment
+```bash
+# Deploy LangChain service
+ansible-playbook site.yml --tags "langchain"
+
+# Check status
+curl http://192.168.0.101:8002/health
+
+# Test chat
+curl -X POST http://192.168.0.101:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Hello", "model_config": "fast"}'
+```
+
+### Management Scripts
+```bash
+# Status
+./scripts/langchain/langchain-manage.sh status
+
+# Logs
+./scripts/langchain/langchain-manage.sh logs
+
+# Restart
+./scripts/langchain/langchain-manage.sh restart
+
+# Run tests
+./scripts/langchain/langchain-test.sh
+
+# Diagnostics
+./scripts/langchain/langchain-diagnostic.sh
+```
+
+### Python Client
+```python
+from scripts.langchain.langchain_client import LangChainClient
+
+client = LangChainClient()
+response = client.chat("What is Docker?")
+rag_result = client.rag_query("How to configure OSPF?", "langchain_manuals")
+```
+
+See `docs/langchain-service/` for detailed documentation:
+- `README.md` - Overview and architecture
+- `USAGE.md` - API usage examples
+- `IMPLEMENTATION.md` - Code patterns and extension
+- `DEPLOYMENT.md` - Installation and configuration
+- `TROUBLESHOOTING.md` - Common issues and solutions
 
 ## Related Repositories
 - `proxmox-ztp`: Proxmox Zero-Touch Provisioning (reference)

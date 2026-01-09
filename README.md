@@ -67,6 +67,7 @@ Ansible automation to transform Ubuntu 24.04 LTS into a production-ready AI and 
 - **Qdrant**: Vector database for semantic search
 - **Docling**: Document parsing (PDF, DOCX, Markdown)
 - **RAG Ingestion**: Custom chunking and embedding pipeline
+- **LangChain Service**: Unified RAG API, agents, and conversation management
 - **n8n**: Workflow automation for GitHub, monitoring, RAG
 - **Docs Generator**: MkDocs Material site from RAG queries
 
@@ -142,6 +143,7 @@ ansible/
     ├── security/           # Firewall, fail2ban, hardening
     ├── mcp-servers/        # MCP Gateway and AI autonomy tools
     ├── rag-stack/          # Qdrant, Docling, RAG ingestion
+    ├── langchain-service/  # LangChain RAG API and agents
     ├── n8n/                # Workflow automation
     └── docs-generator/     # MkDocs Material documentation site
 ```
@@ -161,6 +163,7 @@ ansible/
 | `security` | Security hardening |
 | `mcp` | MCP servers for AI autonomy |
 | `rag` | RAG stack (Qdrant, Docling, ingestion) |
+| `langchain` | LangChain service (RAG API, agents) |
 | `n8n` | Workflow automation |
 | `docs` | Documentation generator (MkDocs) |
 
@@ -207,6 +210,7 @@ After deployment, services are available at:
 | MCP Gateway | http://server:8811 | AI autonomy gateway |
 | Neo4j | http://server:7474 | Graph database for MCP memory |
 | Qdrant | http://server:6333 | Vector database |
+| LangChain | http://server:8002 | RAG API and agents |
 | n8n | http://server:5678 | Workflow automation |
 | Docs Site | http://server:8088 | Generated documentation |
 | Docs API | http://server:8089 | Documentation generator API |
@@ -260,6 +264,69 @@ mcp:
 - **Brave Search**: https://brave.com/search/api/
 - **Perplexity**: https://perplexity.ai/ (API settings)
 - **Grafana**: Configuration → API keys (self-hosted)
+
+## LangChain Service
+
+A unified API service for RAG pipelines, autonomous agents, and conversation management.
+
+### Features
+- **RAG Chains**: Document-based Q&A with Qdrant vector store
+- **Conversational RAG**: RAG with chat history support
+- **Agents**: DevOps and NOC expert agents for infrastructure tasks
+- **Q&A Chains**: General, NOC expert, and code analysis
+- **Summary Chains**: Document, log, and config summarization
+- **Memory Management**: Buffer, window, and summary memory types
+
+### Quick Start
+
+```bash
+# Health check
+curl http://192.168.0.101:8002/health
+
+# Simple chat
+curl -X POST http://192.168.0.101:8002/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "What is Docker?", "model_config": "general"}'
+
+# RAG query
+curl -X POST http://192.168.0.101:8002/rag/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "How to configure OSPF?", "collection": "langchain_manuals"}'
+
+# Run agent
+curl -X POST http://192.168.0.101:8002/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{"task": "Check Docker containers status", "agent_type": "devops"}'
+```
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/info` | GET | Service information |
+| `/chat` | POST | Simple Q&A |
+| `/rag/query` | POST | RAG document Q&A |
+| `/rag/conversational` | POST | Conversational RAG |
+| `/agent/run` | POST | Run agent task |
+| `/agent/troubleshoot` | POST | NOC troubleshooting |
+| `/summarize` | POST | Text summarization |
+| `/summarize/log` | POST | Log analysis |
+| `/summarize/config` | POST | Config analysis |
+
+### Deployment
+
+```bash
+# Deploy via Ansible
+ansible-playbook site.yml --tags "langchain"
+
+# Management scripts
+./scripts/langchain/langchain-manage.sh status
+./scripts/langchain/langchain-manage.sh logs
+./scripts/langchain/langchain-test.sh
+```
+
+See [LangChain Service Documentation](docs/langchain-service/README.md) for detailed guides.
 
 ## GPU Utilization
 
