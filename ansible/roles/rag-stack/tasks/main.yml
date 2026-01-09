@@ -1,0 +1,286 @@
+---
+# =============================================================================
+# RAG Stack Role - Personal RAG Assistant Infrastructure
+# =============================================================================
+# Components:
+#   - Qdrant: High-performance vector database
+#   - Docling API: Document parsing and ingestion
+#   - Open Interpreter: Code execution sandbox
+#   - AnythingLLM: Optional RAG frontend (alternative to OpenWebUI RAG)
+# =============================================================================
+
+- name: Display RAG stack deployment info
+  ansible.builtin.debug:
+    msg: |
+      ===============================================
+      Deploying RAG Stack
+      - Qdrant Vector DB: Port {{ rag_stack.qdrant.port }}
+      - Docling API: Port {{ rag_stack.docling.port }}
+      - Open Interpreter: Port {{ rag_stack.interpreter.port }}
+      {% if rag_stack.anythingllm.enabled %}
+      - AnythingLLM: Port {{ rag_stack.anythingllm.port }}
+      {% endif %}
+      ===============================================
+
+# =============================================================================
+# Directory Setup
+# =============================================================================
+
+- name: Create RAG stack directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ rag_stack.data_path }}"
+    - "{{ rag_stack.data_path }}/qdrant"
+    - "{{ rag_stack.data_path }}/docling"
+    - "{{ rag_stack.data_path }}/docling/input"
+    - "{{ rag_stack.data_path }}/docling/output"
+    - "{{ rag_stack.data_path }}/interpreter"
+    - "{{ rag_stack.data_path }}/anythingllm"
+    - "{{ rag_stack.documents_path }}"
+    - "{{ rag_stack.documents_path }}/cisco"
+    - "{{ rag_stack.documents_path }}/paloalto"
+    - "{{ rag_stack.documents_path }}/juniper"
+    - "{{ rag_stack.documents_path }}/versa"
+    - "{{ rag_stack.documents_path }}/satellite"
+    - "{{ rag_stack.documents_path }}/configs"
+
+# =============================================================================
+# Qdrant Vector Database
+# =============================================================================
+
+- name: Deploy Qdrant vector database
+  community.docker.docker_container:
+    name: qdrant
+    image: "qdrant/qdrant:{{ rag_stack.qdrant.version }}"
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ rag_stack.qdrant.port }}:6333"
+      - "{{ rag_stack.qdrant.grpc_port }}:6334"
+    volumes:
+      - "{{ rag_stack.data_path }}/qdrant:/qdrant/storage:z"
+    env:
+      QDRANT__SERVICE__GRPC_PORT: "6334"
+      QDRANT__SERVICE__HTTP_PORT: "6333"
+      QDRANT__LOG_LEVEL: "INFO"
+    networks:
+      - name: ai-network
+    labels:
+      traefik.enable: "false"
+  when: rag_stack.qdrant.enabled
+
+- name: Wait for Qdrant to be healthy
+  ansible.builtin.uri:
+    url: "http://localhost:{{ rag_stack.qdrant.port }}/readyz"
+    method: GET
+    status_code: 200
+  register: qdrant_health
+  until: qdrant_health.status == 200
+  retries: 30
+  delay: 5
+  when: rag_stack.qdrant.enabled
+
+# =============================================================================
+# Docling Document Parser API
+# =============================================================================
+
+- name: Deploy Docling API for document parsing
+  community.docker.docker_container:
+    name: docling-api
+    image: "{{ rag_stack.docling.image }}"
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ rag_stack.docling.port }}:8080"
+    volumes:
+      - "{{ rag_stack.data_path }}/docling/input:/app/input:z"
+      - "{{ rag_stack.data_path }}/docling/output:/app/output:z"
+      - "{{ rag_stack.documents_path }}:/app/documents:ro"
+    env:
+      LOG_LEVEL: "INFO"
+    networks:
+      - name: ai-network
+    labels:
+      traefik.enable: "false"
+  when: rag_stack.docling.enabled
+
+# =============================================================================
+# Open Interpreter (Code Execution Sandbox)
+# =============================================================================
+
+- name: Deploy Open Interpreter sandbox
+  community.docker.docker_container:
+    name: open-interpreter
+    image: "{{ rag_stack.interpreter.image }}"
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ rag_stack.interpreter.port }}:8000"
+    volumes:
+      - "{{ rag_stack.data_path }}/interpreter:/home/user:z"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"  # For Docker-in-Docker operations
+    env:
+      INTERPRETER_MODE: "server"
+      SANDBOX_ENABLED: "true"
+      OLLAMA_HOST: "http://ollama:11434"
+      DEFAULT_MODEL: "{{ rag_stack.interpreter.default_model }}"
+    runtime: "{{ 'nvidia' if rag_stack.interpreter.gpu_enabled else omit }}"
+    device_requests: "{{ [{'driver': 'nvidia', 'count': -1, 'capabilities': [['gpu']]}] if rag_stack.interpreter.gpu_enabled else omit }}"
+    networks:
+      - name: ai-network
+    labels:
+      traefik.enable: "false"
+  when: rag_stack.interpreter.enabled
+
+# =============================================================================
+# AnythingLLM (Optional RAG Frontend)
+# =============================================================================
+
+- name: Deploy AnythingLLM
+  community.docker.docker_container:
+    name: anythingllm
+    image: "mintplexlabs/anythingllm:{{ rag_stack.anythingllm.version }}"
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ rag_stack.anythingllm.port }}:3001"
+    volumes:
+      - "{{ rag_stack.data_path }}/anythingllm:/app/server/storage:z"
+      - "{{ rag_stack.documents_path }}:/app/documents:ro"
+    env:
+      STORAGE_DIR: "/app/server/storage"
+      # LLM Configuration
+      LLM_PROVIDER: "ollama"
+      OLLAMA_BASE_PATH: "http://ollama:11434"
+      OLLAMA_MODEL_PREF: "{{ rag_stack.anythingllm.default_model }}"
+      # Embedding Configuration
+      EMBEDDING_ENGINE: "ollama"
+      EMBEDDING_MODEL_PREF: "nomic-embed-text"
+      EMBEDDING_BASE_PATH: "http://ollama:11434"
+      # Vector DB Configuration
+      VECTOR_DB: "qdrant"
+      QDRANT_ENDPOINT: "http://qdrant:6333"
+      # Security
+      AUTH_TOKEN: "{{ rag_stack.anythingllm.auth_token | default('') }}"
+      JWT_SECRET: "{{ rag_stack.anythingllm.jwt_secret | default(lookup('password', '/dev/null chars=ascii_letters,digits length=32')) }}"
+    networks:
+      - name: ai-network
+    labels:
+      traefik.enable: "false"
+  when: rag_stack.anythingllm.enabled
+
+# =============================================================================
+# RAG Ingestion Service (Custom Python Service)
+# =============================================================================
+
+- name: Create RAG ingestion service directory
+  ansible.builtin.file:
+    path: "{{ rag_stack.data_path }}/ingestion"
+    state: directory
+    mode: "0755"
+
+- name: Deploy RAG ingestion service configuration
+  ansible.builtin.template:
+    src: ingestion-config.yml.j2
+    dest: "{{ rag_stack.data_path }}/ingestion/config.yml"
+    mode: "0644"
+
+- name: Deploy RAG ingestion Dockerfile
+  ansible.builtin.template:
+    src: Dockerfile.ingestion.j2
+    dest: "{{ rag_stack.data_path }}/ingestion/Dockerfile"
+    mode: "0644"
+
+- name: Deploy RAG ingestion service code
+  ansible.builtin.template:
+    src: ingestion-service.py.j2
+    dest: "{{ rag_stack.data_path }}/ingestion/service.py"
+    mode: "0755"
+
+- name: Build RAG ingestion service image
+  community.docker.docker_image:
+    name: rag-ingestion
+    tag: latest
+    source: build
+    build:
+      path: "{{ rag_stack.data_path }}/ingestion"
+      dockerfile: Dockerfile
+    force_source: true
+
+- name: Deploy RAG ingestion service
+  community.docker.docker_container:
+    name: rag-ingestion
+    image: rag-ingestion:latest
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ rag_stack.ingestion.port }}:8000"
+    volumes:
+      - "{{ rag_stack.data_path }}/ingestion/config.yml:/app/config.yml:ro"
+      - "{{ rag_stack.documents_path }}:/app/documents:ro"
+      - "{{ rag_stack.data_path }}/docling/output:/app/parsed:rw"
+    env:
+      QDRANT_HOST: "qdrant"
+      QDRANT_PORT: "6333"
+      OLLAMA_HOST: "http://ollama:11434"
+      EMBEDDING_MODEL: "nomic-embed-text"
+      NEO4J_URI: "bolt://neo4j-mcp:7687"
+      NEO4J_USER: "neo4j"
+      NEO4J_PASSWORD: "{{ mcp.neo4j.password }}"
+    networks:
+      - name: ai-network
+    labels:
+      traefik.enable: "false"
+
+# =============================================================================
+# Create Docker Compose Reference File
+# =============================================================================
+
+- name: Create docker-compose directory for RAG stack
+  ansible.builtin.file:
+    path: /opt/docker-compose/rag-stack
+    state: directory
+    mode: "0755"
+
+- name: Deploy RAG stack docker-compose reference
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/docker-compose/rag-stack/docker-compose.yml
+    mode: "0644"
+
+- name: Display RAG stack deployment summary
+  ansible.builtin.debug:
+    msg: |
+      ===============================================
+      RAG Stack Deployment Complete!
+      ===============================================
+
+      Endpoints:
+      - Qdrant Dashboard: http://{{ server_ip }}:{{ rag_stack.qdrant.port }}/dashboard
+      - Qdrant API: http://{{ server_ip }}:{{ rag_stack.qdrant.port }}
+      {% if rag_stack.docling.enabled %}
+      - Docling API: http://{{ server_ip }}:{{ rag_stack.docling.port }}
+      {% endif %}
+      {% if rag_stack.interpreter.enabled %}
+      - Open Interpreter: http://{{ server_ip }}:{{ rag_stack.interpreter.port }}
+      {% endif %}
+      {% if rag_stack.anythingllm.enabled %}
+      - AnythingLLM: http://{{ server_ip }}:{{ rag_stack.anythingllm.port }}
+      {% endif %}
+      - Ingestion API: http://{{ server_ip }}:{{ rag_stack.ingestion.port }}
+
+      Document Storage:
+      - Source Documents: {{ rag_stack.documents_path }}
+      - Parsed Documents: {{ rag_stack.data_path }}/docling/output
+
+      Usage:
+      1. Upload documents to {{ rag_stack.documents_path }}/<vendor>/
+      2. Use the ingestion API to process and index documents
+      3. Query via OpenWebUI RAG or AnythingLLM
+
+      ===============================================

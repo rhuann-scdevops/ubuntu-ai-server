@@ -1,0 +1,109 @@
+# =============================================================================
+# RAG Ingestion Service Configuration
+# =============================================================================
+# This service handles document parsing, chunking, embedding, and storage
+# for the Personal RAG Assistant
+# =============================================================================
+
+service:
+  name: "rag-ingestion"
+  host: "0.0.0.0"
+  port: 8000
+
+# Vector Database Configuration
+vector_store:
+  type: "qdrant"
+  host: "{{ rag_stack.qdrant.host | default('qdrant') }}"
+  port: {{ rag_stack.qdrant.port | default(6333) }}
+  collection_name: "{{ rag_stack.collection_name | default('documents') }}"
+
+# Embedding Configuration
+embeddings:
+  provider: "ollama"
+  host: "http://ollama:11434"
+  model: "nomic-embed-text"
+  dimension: 768  # nomic-embed-text dimension
+
+# Knowledge Graph (Neo4j) for enhanced retrieval
+knowledge_graph:
+  enabled: {{ mcp.neo4j.enabled | default(true) | lower }}
+  uri: "bolt://neo4j-mcp:7687"
+  user: "neo4j"
+  password: "{{ mcp.neo4j.password }}"
+
+# Document Sources Configuration
+document_sources:
+{% for vendor in rag_stack.vendor_docs | default(['cisco', 'paloalto', 'juniper', 'versa', 'satellite', 'configs']) %}
+  - name: "{{ vendor }}"
+    path: "/app/documents/{{ vendor }}"
+    metadata:
+      vendor: "{{ vendor }}"
+      type: "technical_docs"
+{% endfor %}
+
+# Chunking Strategy
+chunking:
+  strategy: "semantic"  # semantic, fixed, or recursive
+  chunk_size: {{ rag_stack.chunk_size | default(512) }}
+  chunk_overlap: {{ rag_stack.chunk_overlap | default(64) }}
+  min_chunk_size: {{ rag_stack.min_chunk_size | default(100) }}
+  max_chunk_size: {{ rag_stack.max_chunk_size | default(1024) }}
+
+  # Preserve these elements as separate chunks
+  preserve_elements:
+    - code_blocks
+    - tables
+    - lists
+    - headings
+
+# Document Parsing Settings
+parsing:
+  # Supported formats
+  formats:
+    - pdf
+    - docx
+    - markdown
+    - txt
+    - html
+    - rst
+    - yaml
+    - json
+
+  # PDF-specific settings
+  pdf:
+    extract_tables: true
+    extract_images: false  # Set true to OCR images
+    preserve_layout: true
+
+  # Cleanup settings
+  cleanup:
+    remove_headers_footers: true
+    remove_page_numbers: true
+    normalize_whitespace: true
+    fix_encoding: true
+
+# Metadata Extraction
+metadata:
+  extract_title: true
+  extract_headings: true
+  extract_keywords: true
+  custom_fields:
+    - vendor
+    - device_type
+    - version
+    - environment
+
+# Retrieval Settings (for query-time)
+retrieval:
+  default_top_k: {{ rag_stack.default_top_k | default(5) }}
+  reranking_enabled: {{ rag_stack.reranking_enabled | default(false) | lower }}
+  hybrid_search: true  # Combine vector + keyword search
+
+  # Score thresholds
+  min_score: 0.6
+  diversity_threshold: 0.3  # MMR diversity
+
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

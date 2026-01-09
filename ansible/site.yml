@@ -75,6 +75,14 @@
     - role: mcp-servers
       tags: [mcp, mcp-servers, ai-autonomy, phase10]
 
+    # Phase 11: RAG Stack (Personal RAG Assistant)
+    - role: rag-stack
+      tags: [rag, rag-stack, vector-db, phase11]
+
+    # Phase 12: n8n Workflow Automation
+    - role: n8n
+      tags: [n8n, automation, workflows, phase12]
+
   post_tasks:
     - name: Display completion message
       ansible.builtin.debug:
@@ -93,6 +101,15 @@
           - Traefik:    http://{{ server_ip }}:8080
           - MCP Gateway: http://{{ server_ip }}:{{ mcp.gateway_port }}
           - Neo4j (MCP): http://{{ server_ip }}:7474
+
+          RAG Stack:
+          - Qdrant:       http://{{ server_ip }}:{{ rag_stack.qdrant.port }}
+          - Docling API:  http://{{ server_ip }}:{{ rag_stack.docling.port }}
+          - Interpreter:  http://{{ server_ip }}:{{ rag_stack.interpreter.port }}
+          - Ingestion:    http://{{ server_ip }}:{{ rag_stack.ingestion.port }}
+
+          Automation:
+          - n8n:          http://{{ server_ip }}:{{ n8n.port }}
 
           GPU Status:
             nvidia-smi

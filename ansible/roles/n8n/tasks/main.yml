@@ -1,0 +1,201 @@
+---
+# =============================================================================
+# n8n Workflow Automation Role
+# =============================================================================
+# n8n is a self-hosted workflow automation tool that enables:
+#   - GitHub Actions integration
+#   - AI/LLM workflow nodes
+#   - HTTP webhooks for triggers
+#   - Database operations
+#   - Multi-service orchestration
+# =============================================================================
+
+- name: Display n8n deployment info
+  ansible.builtin.debug:
+    msg: |
+      ===============================================
+      Deploying n8n Workflow Automation
+      - Web UI: Port {{ n8n.port }}
+      - Webhook: Port {{ n8n.webhook_port }}
+      ===============================================
+
+# =============================================================================
+# Directory Setup
+# =============================================================================
+
+- name: Create n8n directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "1000"  # n8n runs as UID 1000
+    group: "1000"
+    mode: "0755"
+  loop:
+    - "{{ n8n.data_path }}"
+    - "{{ n8n.data_path }}/data"
+    - "{{ n8n.data_path }}/files"
+    - "{{ n8n.data_path }}/workflows"
+
+# =============================================================================
+# PostgreSQL for n8n (Optional - for persistence)
+# =============================================================================
+
+- name: Deploy PostgreSQL for n8n
+  community.docker.docker_container:
+    name: postgres-n8n
+    image: "postgres:16-alpine"
+    state: started
+    restart_policy: unless-stopped
+    volumes:
+      - "{{ n8n.data_path }}/postgres:/var/lib/postgresql/data:z"
+    env:
+      POSTGRES_USER: "{{ n8n.db_user }}"
+      POSTGRES_PASSWORD: "{{ n8n.db_password }}"
+      POSTGRES_DB: "{{ n8n.db_name }}"
+    networks:
+      - name: ai-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U {{ n8n.db_user }} -d {{ n8n.db_name }}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  when: n8n.use_postgres
+
+- name: Wait for PostgreSQL to be healthy
+  ansible.builtin.pause:
+    seconds: 15
+  when: n8n.use_postgres
+
+# =============================================================================
+# n8n Workflow Automation
+# =============================================================================
+
+- name: Deploy n8n
+  community.docker.docker_container:
+    name: n8n
+    image: "docker.n8n.io/n8nio/n8n:{{ n8n.version }}"
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ n8n.port }}:5678"
+      - "{{ n8n.webhook_port }}:5679"
+    volumes:
+      - "{{ n8n.data_path }}/data:/home/node/.n8n:z"
+      - "{{ n8n.data_path }}/files:/files:z"
+    env:
+      # Basic configuration
+      N8N_HOST: "{{ server_ip }}"
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: "http"
+      WEBHOOK_URL: "http://{{ server_ip }}:{{ n8n.webhook_port }}/"
+      GENERIC_TIMEZONE: "{{ server_timezone }}"
+
+      # Database (PostgreSQL or SQLite)
+      DB_TYPE: "{{ 'postgresdb' if n8n.use_postgres else 'sqlite' }}"
+      DB_POSTGRESDB_HOST: "{{ 'postgres-n8n' if n8n.use_postgres else omit }}"
+      DB_POSTGRESDB_PORT: "{{ '5432' if n8n.use_postgres else omit }}"
+      DB_POSTGRESDB_DATABASE: "{{ n8n.db_name if n8n.use_postgres else omit }}"
+      DB_POSTGRESDB_USER: "{{ n8n.db_user if n8n.use_postgres else omit }}"
+      DB_POSTGRESDB_PASSWORD: "{{ n8n.db_password if n8n.use_postgres else omit }}"
+
+      # Execution settings
+      EXECUTIONS_PROCESS: "main"
+      EXECUTIONS_MODE: "regular"
+      EXECUTIONS_DATA_SAVE_ON_ERROR: "all"
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: "all"
+      EXECUTIONS_DATA_SAVE_ON_PROGRESS: "true"
+      EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS: "true"
+
+      # Security
+      N8N_BASIC_AUTH_ACTIVE: "{{ 'true' if n8n.basic_auth_enabled else 'false' }}"
+      N8N_BASIC_AUTH_USER: "{{ n8n.basic_auth_user if n8n.basic_auth_enabled else omit }}"
+      N8N_BASIC_AUTH_PASSWORD: "{{ n8n.basic_auth_password if n8n.basic_auth_enabled else omit }}"
+
+      # AI/LLM Integration
+      N8N_AI_ENABLED: "true"
+
+      # External services
+      N8N_TEMPLATES_ENABLED: "true"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+
+      # Community nodes
+      N8N_COMMUNITY_PACKAGES_ENABLED: "true"
+      NODE_FUNCTION_ALLOW_EXTERNAL: "*"
+    networks:
+      - name: ai-network
+    labels:
+      traefik.enable: "false"
+
+- name: Wait for n8n to be ready
+  ansible.builtin.uri:
+    url: "http://localhost:{{ n8n.port }}/healthz"
+    method: GET
+    status_code: 200
+  register: n8n_health
+  until: n8n_health.status == 200
+  retries: 30
+  delay: 5
+
+# =============================================================================
+# Deploy Example Workflows
+# =============================================================================
+
+- name: Create example workflows directory
+  ansible.builtin.file:
+    path: "{{ n8n.data_path }}/workflows"
+    state: directory
+    mode: "0755"
+
+- name: Deploy example workflow templates
+  ansible.builtin.template:
+    src: "{{ item }}"
+    dest: "{{ n8n.data_path }}/workflows/{{ item | basename | regex_replace('\\.j2$', '') }}"
+    mode: "0644"
+  loop:
+    - workflows/github-pr-automation.json.j2
+    - workflows/rag-query-workflow.json.j2
+    - workflows/infrastructure-check.json.j2
+
+# =============================================================================
+# Create Docker Compose Reference
+# =============================================================================
+
+- name: Create docker-compose directory for n8n
+  ansible.builtin.file:
+    path: /opt/docker-compose/n8n
+    state: directory
+    mode: "0755"
+
+- name: Deploy n8n docker-compose reference
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/docker-compose/n8n/docker-compose.yml
+    mode: "0644"
+
+- name: Display n8n deployment summary
+  ansible.builtin.debug:
+    msg: |
+      ===============================================
+      n8n Workflow Automation Deployed!
+      ===============================================
+
+      Web UI: http://{{ server_ip }}:{{ n8n.port }}
+      Webhook URL: http://{{ server_ip }}:{{ n8n.webhook_port }}
+
+      {% if n8n.basic_auth_enabled %}
+      Login:
+        User: {{ n8n.basic_auth_user }}
+        Password: (from vault)
+      {% endif %}
+
+      Integration Points:
+      - Ollama API: http://ollama:11434
+      - Qdrant: http://qdrant:6333
+      - GitHub: Use GitHub node with token
+      - RAG Ingestion: http://rag-ingestion:8000
+      - Neo4j: bolt://neo4j-mcp:7687
+
+      Example Workflows in: {{ n8n.data_path }}/workflows/
+
+      ===============================================

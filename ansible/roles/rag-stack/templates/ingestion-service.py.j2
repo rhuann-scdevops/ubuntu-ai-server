@@ -1,0 +1,648 @@
+#!/usr/bin/env python3
+"""
+RAG Ingestion Service - Personal RAG Assistant
+===============================================
+FastAPI service for document parsing, chunking, embedding, and vector storage.
+"""
+
+import os
+import hashlib
+import logging
+from pathlib import Path
+from typing import List, Optional, Dict, Any
+from datetime import datetime
+import asyncio
+
+import httpx
+import yaml
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from qdrant_client import QdrantClient
+from qdrant_client.models import (
+    Distance, VectorParams, PointStruct,
+    Filter, FieldCondition, MatchValue
+)
+
+# Optional imports with fallbacks
+try:
+    from neo4j import GraphDatabase
+    NEO4J_AVAILABLE = True
+except ImportError:
+    NEO4J_AVAILABLE = False
+
+try:
+    from docling.document_converter import DocumentConverter
+    DOCLING_AVAILABLE = True
+except ImportError:
+    DOCLING_AVAILABLE = False
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+# Load config
+config_path = Path("/app/config.yml")
+if config_path.exists():
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+else:
+    config = {}
+
+# Environment variables override config
+QDRANT_HOST = os.getenv("QDRANT_HOST", config.get("vector_store", {}).get("host", "qdrant"))
+QDRANT_PORT = int(os.getenv("QDRANT_PORT", config.get("vector_store", {}).get("port", 6333)))
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://neo4j-mcp:7687")
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "changeme123")
+COLLECTION_NAME = config.get("vector_store", {}).get("collection_name", "documents")
+EMBEDDING_DIM = config.get("embeddings", {}).get("dimension", 768)
+
+# Chunking config
+CHUNK_SIZE = config.get("chunking", {}).get("chunk_size", 512)
+CHUNK_OVERLAP = config.get("chunking", {}).get("chunk_overlap", 64)
+
+# =============================================================================
+# Pydantic Models
+# =============================================================================
+
+class DocumentMetadata(BaseModel):
+    """Metadata for a document."""
+    vendor: Optional[str] = None
+    device_type: Optional[str] = None
+    version: Optional[str] = None
+    environment: Optional[str] = None
+    file_path: Optional[str] = None
+    file_name: Optional[str] = None
+    file_type: Optional[str] = None
+    ingested_at: Optional[str] = None
+
+class ChunkInfo(BaseModel):
+    """Information about a document chunk."""
+    chunk_id: str
+    text: str
+    metadata: DocumentMetadata
+    embedding: Optional[List[float]] = None
+
+class IngestRequest(BaseModel):
+    """Request to ingest a document."""
+    file_path: str
+    metadata: Optional[DocumentMetadata] = None
+
+class IngestResponse(BaseModel):
+    """Response from document ingestion."""
+    status: str
+    document_id: str
+    chunks_created: int
+    message: str
+
+class SearchRequest(BaseModel):
+    """Search query request."""
+    query: str
+    top_k: int = Field(default=5, ge=1, le=50)
+    filter_vendor: Optional[str] = None
+    filter_device_type: Optional[str] = None
+
+class SearchResult(BaseModel):
+    """Single search result."""
+    chunk_id: str
+    text: str
+    score: float
+    metadata: Dict[str, Any]
+
+class SearchResponse(BaseModel):
+    """Search response with results."""
+    query: str
+    results: List[SearchResult]
+    total_results: int
+
+class BatchIngestRequest(BaseModel):
+    """Request to ingest multiple documents."""
+    directory: str
+    vendor: Optional[str] = None
+    recursive: bool = True
+
+class HealthResponse(BaseModel):
+    """Health check response."""
+    status: str
+    qdrant: str
+    ollama: str
+    neo4j: str
+
+# =============================================================================
+# Service Classes
+# =============================================================================
+
+class OllamaEmbedder:
+    """Generate embeddings using Ollama."""
+
+    def __init__(self, host: str = OLLAMA_HOST, model: str = EMBEDDING_MODEL):
+        self.host = host.rstrip("/")
+        self.model = model
+        self.client = httpx.AsyncClient(timeout=120.0)
+
+    async def embed(self, texts: List[str]) -> List[List[float]]:
+        """Generate embeddings for a list of texts."""
+        embeddings = []
+        for text in texts:
+            try:
+                response = await self.client.post(
+                    f"{self.host}/api/embeddings",
+                    json={"model": self.model, "prompt": text}
+                )
+                response.raise_for_status()
+                data = response.json()
+                embeddings.append(data["embedding"])
+            except Exception as e:
+                logger.error(f"Embedding error: {e}")
+                # Return zero vector on error
+                embeddings.append([0.0] * EMBEDDING_DIM)
+        return embeddings
+
+    async def embed_single(self, text: str) -> List[float]:
+        """Generate embedding for a single text."""
+        embeddings = await self.embed([text])
+        return embeddings[0]
+
+    async def close(self):
+        await self.client.aclose()
+
+
+class TextChunker:
+    """Split text into chunks for embedding."""
+
+    def __init__(
+        self,
+        chunk_size: int = CHUNK_SIZE,
+        chunk_overlap: int = CHUNK_OVERLAP,
+        min_chunk_size: int = 100
+    ):
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self.min_chunk_size = min_chunk_size
+
+    def chunk_text(self, text: str) -> List[str]:
+        """Split text into overlapping chunks."""
+        if not text or len(text) < self.min_chunk_size:
+            return [text] if text else []
+
+        chunks = []
+        start = 0
+        text_len = len(text)
+
+        while start < text_len:
+            end = start + self.chunk_size
+
+            # Try to break at sentence or paragraph boundary
+            if end < text_len:
+                # Look for paragraph break
+                para_break = text.rfind("\n\n", start, end)
+                if para_break > start + self.min_chunk_size:
+                    end = para_break + 2
+                else:
+                    # Look for sentence break
+                    for sep in [". ", ".\n", "! ", "? "]:
+                        sent_break = text.rfind(sep, start, end)
+                        if sent_break > start + self.min_chunk_size:
+                            end = sent_break + len(sep)
+                            break
+
+            chunk = text[start:end].strip()
+            if len(chunk) >= self.min_chunk_size:
+                chunks.append(chunk)
+
+            # Move start with overlap
+            start = end - self.chunk_overlap
+            if start <= 0 or start >= text_len:
+                break
+
+        return chunks
+
+
+class VectorStore:
+    """Qdrant vector store operations."""
+
+    def __init__(self, host: str = QDRANT_HOST, port: int = QDRANT_PORT):
+        self.client = QdrantClient(host=host, port=port)
+        self.collection_name = COLLECTION_NAME
+        self._ensure_collection()
+
+    def _ensure_collection(self):
+        """Create collection if it doesn't exist."""
+        collections = self.client.get_collections().collections
+        collection_names = [c.name for c in collections]
+
+        if self.collection_name not in collection_names:
+            self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=VectorParams(
+                    size=EMBEDDING_DIM,
+                    distance=Distance.COSINE
+                )
+            )
+            logger.info(f"Created collection: {self.collection_name}")
+
+    def upsert_chunks(
+        self,
+        chunks: List[str],
+        embeddings: List[List[float]],
+        metadata_list: List[Dict[str, Any]],
+        document_id: str
+    ) -> int:
+        """Insert or update chunks in the vector store."""
+        points = []
+        for i, (chunk, embedding, metadata) in enumerate(zip(chunks, embeddings, metadata_list)):
+            chunk_id = hashlib.md5(f"{document_id}_{i}_{chunk[:100]}".encode()).hexdigest()
+            point = PointStruct(
+                id=chunk_id,
+                vector=embedding,
+                payload={
+                    "text": chunk,
+                    "document_id": document_id,
+                    "chunk_index": i,
+                    **metadata
+                }
+            )
+            points.append(point)
+
+        if points:
+            self.client.upsert(
+                collection_name=self.collection_name,
+                points=points
+            )
+
+        return len(points)
+
+    def search(
+        self,
+        query_vector: List[float],
+        top_k: int = 5,
+        filter_conditions: Optional[Dict] = None
+    ) -> List[Dict]:
+        """Search for similar chunks."""
+        query_filter = None
+        if filter_conditions:
+            conditions = []
+            for key, value in filter_conditions.items():
+                if value:
+                    conditions.append(
+                        FieldCondition(key=key, match=MatchValue(value=value))
+                    )
+            if conditions:
+                query_filter = Filter(must=conditions)
+
+        results = self.client.search(
+            collection_name=self.collection_name,
+            query_vector=query_vector,
+            limit=top_k,
+            query_filter=query_filter
+        )
+
+        return [
+            {
+                "chunk_id": str(r.id),
+                "text": r.payload.get("text", ""),
+                "score": r.score,
+                "metadata": {
+                    k: v for k, v in r.payload.items()
+                    if k != "text"
+                }
+            }
+            for r in results
+        ]
+
+    def get_stats(self) -> Dict:
+        """Get collection statistics."""
+        try:
+            info = self.client.get_collection(self.collection_name)
+            return {
+                "vectors_count": info.vectors_count,
+                "points_count": info.points_count,
+                "status": info.status.value
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+
+class DocumentParser:
+    """Parse documents into text."""
+
+    @staticmethod
+    def parse_file(file_path: Path) -> str:
+        """Parse a document file into text."""
+        suffix = file_path.suffix.lower()
+
+        if DOCLING_AVAILABLE and suffix == ".pdf":
+            try:
+                converter = DocumentConverter()
+                result = converter.convert(str(file_path))
+                return result.document.export_to_markdown()
+            except Exception as e:
+                logger.warning(f"Docling failed, falling back: {e}")
+
+        # Fallback parsers
+        if suffix in [".txt", ".md", ".rst"]:
+            return file_path.read_text(encoding="utf-8", errors="ignore")
+        elif suffix in [".yaml", ".yml", ".json"]:
+            return file_path.read_text(encoding="utf-8", errors="ignore")
+        elif suffix == ".pdf":
+            try:
+                from pypdf import PdfReader
+                reader = PdfReader(str(file_path))
+                text = ""
+                for page in reader.pages:
+                    text += page.extract_text() + "\n"
+                return text
+            except Exception as e:
+                raise HTTPException(500, f"PDF parsing failed: {e}")
+        elif suffix == ".docx":
+            try:
+                from docx import Document
+                doc = Document(str(file_path))
+                return "\n".join(p.text for p in doc.paragraphs)
+            except Exception as e:
+                raise HTTPException(500, f"DOCX parsing failed: {e}")
+        elif suffix in [".html", ".htm"]:
+            try:
+                from bs4 import BeautifulSoup
+                html = file_path.read_text(encoding="utf-8", errors="ignore")
+                soup = BeautifulSoup(html, "html.parser")
+                return soup.get_text(separator="\n")
+            except Exception as e:
+                raise HTTPException(500, f"HTML parsing failed: {e}")
+        else:
+            # Try to read as text
+            try:
+                return file_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                raise HTTPException(400, f"Unsupported file type: {suffix}")
+
+
+# =============================================================================
+# FastAPI Application
+# =============================================================================
+
+app = FastAPI(
+    title="RAG Ingestion Service",
+    description="Document parsing, chunking, embedding, and vector storage for RAG",
+    version="1.0.0"
+)
+
+# Initialize services
+embedder = OllamaEmbedder()
+chunker = TextChunker()
+vector_store = VectorStore()
+parser = DocumentParser()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    await embedder.close()
+
+
+@app.get("/health", response_model=HealthResponse)
+async def health_check():
+    """Check health of all services."""
+    # Check Qdrant
+    qdrant_status = "healthy"
+    try:
+        vector_store.get_stats()
+    except Exception:
+        qdrant_status = "unhealthy"
+
+    # Check Ollama
+    ollama_status = "healthy"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{OLLAMA_HOST}/api/tags")
+            if resp.status_code != 200:
+                ollama_status = "unhealthy"
+    except Exception:
+        ollama_status = "unhealthy"
+
+    # Check Neo4j
+    neo4j_status = "disabled"
+    if NEO4J_AVAILABLE and config.get("knowledge_graph", {}).get("enabled", False):
+        try:
+            driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+            driver.verify_connectivity()
+            driver.close()
+            neo4j_status = "healthy"
+        except Exception:
+            neo4j_status = "unhealthy"
+
+    overall = "healthy" if qdrant_status == "healthy" and ollama_status == "healthy" else "degraded"
+
+    return HealthResponse(
+        status=overall,
+        qdrant=qdrant_status,
+        ollama=ollama_status,
+        neo4j=neo4j_status
+    )
+
+
+@app.get("/stats")
+async def get_stats():
+    """Get vector store statistics."""
+    return vector_store.get_stats()
+
+
+@app.post("/ingest", response_model=IngestResponse)
+async def ingest_document(request: IngestRequest):
+    """Ingest a single document."""
+    file_path = Path(request.file_path)
+
+    if not file_path.exists():
+        raise HTTPException(404, f"File not found: {request.file_path}")
+
+    # Parse document
+    logger.info(f"Parsing document: {file_path}")
+    text = parser.parse_file(file_path)
+
+    if not text or len(text.strip()) < 50:
+        raise HTTPException(400, "Document is empty or too short")
+
+    # Generate document ID
+    document_id = hashlib.md5(str(file_path).encode()).hexdigest()
+
+    # Chunk text
+    chunks = chunker.chunk_text(text)
+    logger.info(f"Created {len(chunks)} chunks")
+
+    # Generate embeddings
+    embeddings = await embedder.embed(chunks)
+
+    # Prepare metadata
+    base_metadata = {
+        "file_path": str(file_path),
+        "file_name": file_path.name,
+        "file_type": file_path.suffix,
+        "ingested_at": datetime.utcnow().isoformat(),
+    }
+    if request.metadata:
+        base_metadata.update(request.metadata.model_dump(exclude_none=True))
+
+    metadata_list = [base_metadata.copy() for _ in chunks]
+
+    # Store in vector database
+    chunks_stored = vector_store.upsert_chunks(
+        chunks=chunks,
+        embeddings=embeddings,
+        metadata_list=metadata_list,
+        document_id=document_id
+    )
+
+    return IngestResponse(
+        status="success",
+        document_id=document_id,
+        chunks_created=chunks_stored,
+        message=f"Ingested {file_path.name} with {chunks_stored} chunks"
+    )
+
+
+@app.post("/ingest/batch")
+async def ingest_batch(request: BatchIngestRequest, background_tasks: BackgroundTasks):
+    """Ingest all documents in a directory."""
+    directory = Path(request.directory)
+
+    if not directory.exists():
+        raise HTTPException(404, f"Directory not found: {request.directory}")
+
+    # Find all supported files
+    supported_extensions = [".pdf", ".docx", ".txt", ".md", ".html", ".yaml", ".yml", ".json"]
+    files = []
+
+    if request.recursive:
+        for ext in supported_extensions:
+            files.extend(directory.rglob(f"*{ext}"))
+    else:
+        for ext in supported_extensions:
+            files.extend(directory.glob(f"*{ext}"))
+
+    if not files:
+        raise HTTPException(400, "No supported documents found in directory")
+
+    # Schedule background ingestion
+    async def process_files():
+        results = []
+        for file_path in files:
+            try:
+                metadata = DocumentMetadata(vendor=request.vendor) if request.vendor else None
+                req = IngestRequest(file_path=str(file_path), metadata=metadata)
+                result = await ingest_document(req)
+                results.append({"file": str(file_path), "status": "success", "chunks": result.chunks_created})
+            except Exception as e:
+                results.append({"file": str(file_path), "status": "error", "error": str(e)})
+                logger.error(f"Failed to ingest {file_path}: {e}")
+        logger.info(f"Batch ingestion complete: {len(results)} files processed")
+
+    background_tasks.add_task(process_files)
+
+    return {
+        "status": "processing",
+        "files_found": len(files),
+        "message": f"Processing {len(files)} documents in background"
+    }
+
+
+@app.post("/search", response_model=SearchResponse)
+async def search_documents(request: SearchRequest):
+    """Search for relevant document chunks."""
+    # Generate query embedding
+    query_embedding = await embedder.embed_single(request.query)
+
+    # Build filter
+    filters = {}
+    if request.filter_vendor:
+        filters["vendor"] = request.filter_vendor
+    if request.filter_device_type:
+        filters["device_type"] = request.filter_device_type
+
+    # Search vector store
+    results = vector_store.search(
+        query_vector=query_embedding,
+        top_k=request.top_k,
+        filter_conditions=filters if filters else None
+    )
+
+    return SearchResponse(
+        query=request.query,
+        results=[
+            SearchResult(
+                chunk_id=r["chunk_id"],
+                text=r["text"],
+                score=r["score"],
+                metadata=r["metadata"]
+            )
+            for r in results
+        ],
+        total_results=len(results)
+    )
+
+
+@app.post("/upload")
+async def upload_and_ingest(
+    file: UploadFile = File(...),
+    vendor: Optional[str] = None,
+    device_type: Optional[str] = None
+):
+    """Upload and ingest a document file."""
+    # Save uploaded file
+    upload_dir = Path("/app/documents/uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    file_path = upload_dir / file.filename
+    content = await file.read()
+    file_path.write_bytes(content)
+
+    # Ingest the file
+    metadata = DocumentMetadata(vendor=vendor, device_type=device_type)
+    request = IngestRequest(file_path=str(file_path), metadata=metadata)
+
+    return await ingest_document(request)
+
+
+@app.delete("/collection")
+async def delete_collection():
+    """Delete the entire collection (use with caution)."""
+    try:
+        vector_store.client.delete_collection(COLLECTION_NAME)
+        vector_store._ensure_collection()
+        return {"status": "success", "message": f"Collection {COLLECTION_NAME} deleted and recreated"}
+    except Exception as e:
+        raise HTTPException(500, f"Failed to delete collection: {e}")
+
+
+@app.get("/")
+async def root():
+    """Root endpoint with service info."""
+    return {
+        "service": "RAG Ingestion Service",
+        "version": "1.0.0",
+        "endpoints": {
+            "health": "/health",
+            "stats": "/stats",
+            "ingest": "/ingest",
+            "batch_ingest": "/ingest/batch",
+            "search": "/search",
+            "upload": "/upload"
+        },
+        "config": {
+            "vector_store": f"qdrant://{QDRANT_HOST}:{QDRANT_PORT}",
+            "embedding_model": EMBEDDING_MODEL,
+            "chunk_size": CHUNK_SIZE
+        }
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

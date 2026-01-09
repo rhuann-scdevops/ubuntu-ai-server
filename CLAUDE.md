@@ -54,6 +54,8 @@ base-system
                     └── backup
 security (can run independently)
 mcp-servers (requires docker-setup)
+rag-stack (requires docker-setup, ai-stack)
+n8n (requires docker-setup)
 ```
 
 ## Key Variables (group_vars/all.yml)
@@ -126,6 +128,13 @@ docker run --rm --gpus all nvidia/cuda:12.2-base-ubuntu22.04 nvidia-smi
 | 8811 | MCP Gateway |
 | 7474 | Neo4j Browser |
 | 7687 | Neo4j Bolt |
+| 6333 | Qdrant HTTP |
+| 6334 | Qdrant gRPC |
+| 8085 | Docling API |
+| 8086 | Open Interpreter |
+| 8087 | RAG Ingestion |
+| 5678 | n8n UI |
+| 5679 | n8n Webhooks |
 
 ## MCP Servers for AI Autonomy
 
@@ -156,6 +165,45 @@ The server includes MCP (Model Context Protocol) servers that enable AI assistan
 | `/fast-pool/docker/mcp/config` | MCP configuration files |
 | `/fast-pool/docker/mcp/data` | MCP persistent data |
 | `/fast-pool/docker/mcp/data/neo4j` | Neo4j graph database |
+
+## Personal RAG Assistant
+
+The server includes a complete RAG (Retrieval-Augmented Generation) stack for document-aware AI:
+
+### Components
+- **Qdrant**: Vector database for semantic search (port 6333)
+- **Docling API**: Document parsing (PDF, DOCX, Markdown) (port 8085)
+- **RAG Ingestion**: Custom pipeline for chunking and embedding (port 8087)
+- **Open Interpreter**: Code execution sandbox (port 8086)
+- **n8n**: Workflow automation for GitHub, monitoring, etc. (port 5678)
+
+### Document Storage
+| Path | Purpose |
+|------|---------|
+| `/bulk-pool/datasets/documents/cisco` | Cisco documentation |
+| `/bulk-pool/datasets/documents/paloalto` | Palo Alto documentation |
+| `/bulk-pool/datasets/documents/juniper` | Juniper documentation |
+| `/bulk-pool/datasets/documents/versa` | Versa documentation |
+| `/bulk-pool/datasets/documents/satellite` | Satellite vendor docs |
+| `/bulk-pool/datasets/documents/configs` | Configuration files |
+
+### RAG Data Storage
+| Path | Purpose |
+|------|---------|
+| `/fast-pool/docker/rag/qdrant` | Vector embeddings |
+| `/fast-pool/docker/rag/docling` | Parsed documents |
+| `/fast-pool/docker/n8n` | Workflow automation data |
+
+### RAG Deployment
+```bash
+# Deploy RAG stack only
+ansible-playbook site.yml --tags "rag,rag-stack"
+
+# Deploy n8n only
+ansible-playbook site.yml --tags "n8n,automation"
+```
+
+See `docs/PERSONAL-RAG-ASSISTANT.md` for detailed architecture and usage.
 
 ## Related Repositories
 - `proxmox-ztp`: Proxmox Zero-Touch Provisioning (reference)

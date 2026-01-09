@@ -1,0 +1,66 @@
+---
+# =============================================================================
+# RAG Stack Role Defaults
+# =============================================================================
+# These values can be overridden in group_vars/all.yml
+# =============================================================================
+
+rag_stack:
+  # Base paths
+  data_path: "/fast-pool/docker/rag"
+  documents_path: "/bulk-pool/datasets/documents"
+
+  # Qdrant Vector Database
+  qdrant:
+    enabled: true
+    version: "latest"
+    port: 6333
+    grpc_port: 6334
+    host: "qdrant"
+
+  # Docling Document Parser API
+  docling:
+    enabled: true
+    image: "ds4sd/docling-serve:latest"
+    port: 8085
+
+  # Open Interpreter (Code Sandbox)
+  interpreter:
+    enabled: true
+    image: "openinterpreter/open-interpreter:latest"
+    port: 8086
+    default_model: "codellama:13b"
+    gpu_enabled: false
+
+  # AnythingLLM (Optional RAG Frontend)
+  anythingllm:
+    enabled: false
+    version: "latest"
+    port: 3005
+    default_model: "llama3.2:8b"
+    auth_token: ""
+    jwt_secret: ""
+
+  # RAG Ingestion Service
+  ingestion:
+    port: 8087
+
+  # Document collections by vendor
+  vendor_docs:
+    - cisco
+    - paloalto
+    - juniper
+    - versa
+    - satellite
+    - configs
+
+  # Chunking configuration
+  chunk_size: 512
+  chunk_overlap: 64
+  min_chunk_size: 100
+  max_chunk_size: 1024
+
+  # Retrieval configuration
+  collection_name: "documents"
+  default_top_k: 5
+  reranking_enabled: false
