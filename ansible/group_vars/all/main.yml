@@ -64,8 +64,8 @@ zfs_bulk_pool:
 # =============================================================================
 nvidia:
   driver_version: "550"  # Latest stable driver
-  cuda_version: "12.4"
-  cudnn_version: "8"
+  cuda_version: "12.5"  # 12.4 not available, using 12.5
+  cudnn_version: "9"
   gpu_model: "Quadro P4000"
   compute_capability: "6.1"  # Pascal architecture
 
@@ -171,7 +171,7 @@ monitoring:
   grafana:
     enabled: true
     port: 3002
-    admin_password: "ChangeMe!"
+    admin_password: "{{ vault_grafana_admin_password | default('ChangeMe!') }}"
     data_path: "/fast-pool/docker/grafana"
 
   # Loki - Log aggregation
@@ -311,19 +311,19 @@ mcp:
   # GitHub - Repository management, PRs, issues, code search
   github:
     enabled: true
-    token: ""  # Set via vault: YOUR_GITHUB_PERSONAL_ACCESS_TOKEN
+    token: "{{ vault_mcp_github_token | default('') }}"
 
   # Grafana - Server monitoring integration
   grafana:
     enabled: true
-    api_key: ""  # Set via vault: YOUR_GRAFANA_API_KEY
+    api_key: "{{ vault_mcp_grafana_api_key | default('') }}"
 
   # Database - PostgreSQL/MySQL/SQLite access
   database:
     enabled: true
-    connection_string: "postgresql+asyncpg://mcp:changeme@postgres-mcp:5432/mcp_data"
+    connection_string: "postgresql+asyncpg://mcp:{{ vault_mcp_db_password | default('changeme') }}@postgres-mcp:5432/mcp_data"
     user: "mcp"
-    password: "changeme"  # Set via vault
+    password: "{{ vault_mcp_db_password | default('changeme') }}"
     name: "mcp_data"
 
   # Kubectl - Kubernetes management (if using K8s)
@@ -338,12 +338,12 @@ mcp:
   # Brave Search - Web search for pages, images, news
   brave:
     enabled: true
-    api_key: ""  # Set via vault: Get from https://brave.com/search/api/
+    api_key: "{{ vault_mcp_brave_api_key | default('') }}"
 
   # Perplexity - Deep research with web access
   perplexity:
     enabled: true
-    api_key: ""  # Set via vault: Get from https://perplexity.ai/
+    api_key: "{{ vault_mcp_perplexity_api_key | default('') }}"
 
   # Hugging Face - ML models, datasets, papers
   huggingface:
@@ -361,7 +361,7 @@ mcp:
   # Notion - Documentation and knowledge management
   notion:
     enabled: false
-    token: ""  # Set via vault: YOUR_NOTION_INTEGRATION_TOKEN
+    token: "{{ vault_mcp_notion_token | default('') }}"
 
   # Slack - Team communication
   slack:
@@ -392,7 +392,7 @@ mcp:
   # Neo4j Memory - Advanced graph-based memory
   neo4j:
     enabled: true
-    password: "changeme123"  # Set via vault
+    password: "{{ vault_neo4j_password | default('changeme123') }}"
 
   # SQLite - Local database with vector search
   sqlite:
@@ -495,13 +495,13 @@ n8n:
   # Database (PostgreSQL recommended for production)
   use_postgres: true
   db_user: "n8n"
-  db_password: "changeme"  # Override in vault
+  db_password: "{{ vault_n8n_db_password | default('changeme') }}"
   db_name: "n8n"
 
   # Authentication
   basic_auth_enabled: true
   basic_auth_user: "admin"
-  basic_auth_password: "changeme"  # Override in vault
+  basic_auth_password: "{{ vault_n8n_basic_auth_password | default('changeme') }}"
 
 # =============================================================================
 # Documentation Generator Configuration

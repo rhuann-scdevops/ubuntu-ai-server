@@ -18,6 +18,8 @@ passwords.yml
 .env
 .env.*
 !.env.example
+.vault_password
+*/.vault_password
 
 # SSH keys
 *.pem

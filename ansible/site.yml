@@ -14,6 +14,9 @@
   hosts: ai_servers
   gather_facts: true
 
+  vars_files:
+    - inventory/vault.yml
+
   pre_tasks:
     - name: Display server information
       ansible.builtin.debug:
