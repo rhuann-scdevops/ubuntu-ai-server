@@ -96,7 +96,7 @@ ai_stack:
     port: 11434
     models_path: "/fast-pool/ai-models/ollama"
     default_models:
-      - "llama3.2:8b"
+      - "llama3.2:3b"
       - "codellama:13b"
       - "mistral:7b"
       - "nomic-embed-text"
@@ -107,9 +107,9 @@ ai_stack:
     port: 3000
     data_path: "/fast-pool/docker/open-webui"
 
-  # ComfyUI - Stable Diffusion
+  # ComfyUI - Stable Diffusion (disabled - image not available)
   comfyui:
-    enabled: true
+    enabled: false
     port: 8188
     models_path: "/fast-pool/ai-models/comfyui"
 
@@ -288,9 +288,9 @@ mcp:
   data_path: "/fast-pool/docker/mcp/data"
   gateway_port: 8811
 
-  # MCP Gateway
+  # MCP Gateway (disabled - image not available)
   gateway:
-    enabled: true
+    enabled: false
 
   # ==========================================================================
   # CORE INFRASTRUCTURE MCPs

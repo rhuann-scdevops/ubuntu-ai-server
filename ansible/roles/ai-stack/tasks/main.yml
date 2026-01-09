@@ -26,20 +26,17 @@
     image: ollama/ollama:latest
     state: started
     restart_policy: unless-stopped
-    ports:
-      - "{{ ai_stack.ollama.port }}:11434"
+    network_mode: host
     volumes:
       - "{{ ai_stack.ollama.models_path }}:/root/.ollama"
-    devices:
-      - /dev/nvidia0:/dev/nvidia0
-      - /dev/nvidiactl:/dev/nvidiactl
-      - /dev/nvidia-uvm:/dev/nvidia-uvm
+    device_requests:
+      - driver: nvidia
+        count: -1
+        capabilities:
+          - - gpu
     env:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
-    runtime: nvidia
-    networks:
-      - name: ai-network
   when: ai_stack.ollama.enabled
 
 - name: Wait for Ollama to be ready
@@ -74,7 +71,7 @@
     volumes:
       - "{{ ai_stack.open_webui.data_path }}:/app/backend/data"
     env:
-      OLLAMA_BASE_URL: "http://ollama:11434"
+      OLLAMA_BASE_URL: "http://{{ server_ip }}:11434"
       WEBUI_AUTH: "False"
     networks:
       - name: ai-network

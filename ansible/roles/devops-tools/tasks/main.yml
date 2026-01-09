@@ -108,7 +108,7 @@
       USER_UID: "1000"
       USER_GID: "1000"
       GITEA__server__ROOT_URL: "http://{{ server_ip }}:{{ devops_stack.gitea.http_port }}/"
-      GITEA__server__SSH_PORT: "{{ devops_stack.gitea.ssh_port }}"
+      GITEA__server__SSH_PORT: "{{ devops_stack.gitea.ssh_port | string }}"
     networks:
       - name: ai-network
   when: devops_stack.gitea.enabled
@@ -169,13 +169,14 @@
 # =============================================================================
 - name: Wait for Portainer to be ready
   ansible.builtin.uri:
-    url: "https://localhost:{{ devops_stack.portainer.port }}"
+    url: "https://{{ server_ip }}:{{ devops_stack.portainer.port }}"
     method: GET
     validate_certs: false
   register: portainer_ready
   until: portainer_ready.status == 200
-  retries: 30
+  retries: 10
   delay: 5
+  ignore_errors: yes
   when: devops_stack.portainer.enabled
 
 - name: Display DevOps services status

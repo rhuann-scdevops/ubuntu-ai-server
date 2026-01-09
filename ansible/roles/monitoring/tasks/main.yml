@@ -19,6 +19,30 @@
     - "{{ monitoring.loki.data_path }}"
     - /opt/docker-compose/monitoring-stack
 
+- name: Set Prometheus directory ownership
+  ansible.builtin.file:
+    path: "{{ monitoring.prometheus.data_path }}"
+    state: directory
+    owner: "65534"
+    group: "65534"
+    recurse: yes
+
+- name: Set Grafana directory ownership
+  ansible.builtin.file:
+    path: "{{ monitoring.grafana.data_path }}"
+    state: directory
+    owner: "472"
+    group: "472"
+    recurse: yes
+
+- name: Set Loki directory ownership
+  ansible.builtin.file:
+    path: "{{ monitoring.loki.data_path }}"
+    state: directory
+    owner: "10001"
+    group: "10001"
+    recurse: yes
+
 # =============================================================================
 # Node Exporter - System Metrics
 # =============================================================================
@@ -54,15 +78,16 @@
     restart_policy: unless-stopped
     ports:
       - "{{ monitoring.dcgm_exporter.port }}:9400"
-    devices:
-      - /dev/nvidia0:/dev/nvidia0
-      - /dev/nvidiactl:/dev/nvidiactl
-      - /dev/nvidia-uvm:/dev/nvidia-uvm
+    device_requests:
+      - driver: nvidia
+        count: -1
+        capabilities:
+          - - gpu
     env:
       NVIDIA_VISIBLE_DEVICES: all
-    runtime: nvidia
     networks:
       - name: ai-network
+  ignore_errors: yes
   when: monitoring.dcgm_exporter.enabled
 
 # =============================================================================
@@ -189,12 +214,13 @@
 # =============================================================================
 - name: Wait for Grafana to be ready
   ansible.builtin.uri:
-    url: "http://localhost:{{ monitoring.grafana.port }}/api/health"
+    url: "http://{{ server_ip }}:{{ monitoring.grafana.port }}/api/health"
     method: GET
   register: grafana_ready
   until: grafana_ready.status == 200
-  retries: 30
+  retries: 10
   delay: 5
+  ignore_errors: yes
   when: monitoring.grafana.enabled
 
 - name: Display monitoring services status

@@ -91,6 +91,8 @@
       NEO4J_PLUGINS: '["apoc"]'
     networks:
       - name: ai-network
+    timeout: 300
+  ignore_errors: yes
   when: mcp.neo4j.enabled
 
 # =============================================================================

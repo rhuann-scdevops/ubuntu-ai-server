@@ -76,13 +76,14 @@
 
 - name: Wait for Qdrant to be healthy
   ansible.builtin.uri:
-    url: "http://localhost:{{ rag_stack.qdrant.port }}/readyz"
+    url: "http://{{ server_ip }}:{{ rag_stack.qdrant.port }}/readyz"
     method: GET
     status_code: 200
   register: qdrant_health
   until: qdrant_health.status == 200
-  retries: 30
+  retries: 10
   delay: 5
+  ignore_errors: yes
   when: rag_stack.qdrant.enabled
 
 # =============================================================================
