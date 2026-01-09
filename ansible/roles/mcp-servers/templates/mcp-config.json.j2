@@ -1,0 +1,128 @@
+{
+  "mcpServers": {
+    "desktop-commander": {
+      "enabled": {{ mcp.desktop_commander.enabled | lower }},
+      "config": {
+        "paths": [
+          "/home",
+          "/opt",
+          "/fast-pool",
+          "/bulk-pool",
+          "/var/log"
+        ]
+      }
+    },
+
+    "github-official": {
+      "enabled": {{ mcp.github.enabled | lower }},
+      "description": "GitHub repository management, PRs, issues, code search"
+    },
+
+    "grafana": {
+      "enabled": {{ mcp.grafana.enabled | lower }},
+      "config": {
+        "url": "http://{{ server_ip }}:{{ monitoring.grafana.port }}"
+      },
+      "description": "Server monitoring, dashboards, alerts"
+    },
+
+    "database-server": {
+      "enabled": {{ mcp.database.enabled | lower }},
+      "config": {
+        "database_url": "{{ mcp.database.connection_string }}"
+      },
+      "description": "PostgreSQL/MySQL/SQLite database access"
+    },
+
+    "brave": {
+      "enabled": {{ mcp.brave.enabled | lower }},
+      "description": "Web search for pages, images, news, videos"
+    },
+
+    "perplexity-ask": {
+      "enabled": {{ mcp.perplexity.enabled | lower }},
+      "description": "Deep research with real-time web access"
+    },
+
+    "hugging-face": {
+      "enabled": {{ mcp.huggingface.enabled | lower }},
+      "description": "ML models, datasets, research papers"
+    },
+
+    "notion": {
+      "enabled": {{ mcp.notion.enabled | lower }},
+      "description": "Documentation and knowledge management"
+    },
+
+    "slack": {
+      "enabled": {{ mcp.slack.enabled | lower }},
+      "config": {
+        "team_id": "{{ mcp.slack.team_id }}",
+        "channel_ids": "{{ mcp.slack.channel_ids }}"
+      },
+      "description": "Team communication and notifications"
+    },
+
+    "gmail-mcp": {
+      "enabled": {{ mcp.gmail.enabled | lower }},
+      "config": {
+        "email_address": "{{ mcp.gmail.email_address }}"
+      },
+      "description": "Email reading, searching, and sending"
+    },
+
+    "memory": {
+      "enabled": {{ mcp.memory.enabled | lower }},
+      "description": "Persistent knowledge graph for context retention"
+    },
+
+    "neo4j-memory": {
+      "enabled": {{ mcp.neo4j.enabled | lower }},
+      "config": {
+        "url": "bolt://neo4j-mcp:7687",
+        "username": "neo4j",
+        "database": "neo4j"
+      },
+      "description": "Advanced graph-based persistent memory"
+    },
+
+    "puppeteer": {
+      "enabled": {{ mcp.puppeteer.enabled | lower }},
+      "description": "Browser automation and web scraping"
+    },
+
+    "playwright-mcp-server": {
+      "enabled": {{ mcp.playwright.enabled | lower }},
+      "config": {
+        "data": "/data/playwright"
+      },
+      "description": "Advanced browser automation for web tasks"
+    },
+
+    "kubectl-mcp-server": {
+      "enabled": {{ mcp.kubectl.enabled | lower }},
+      "config": {
+        "kubeconfig": "/root/.kube/config"
+      },
+      "description": "Kubernetes cluster management"
+    },
+
+    "arxiv-mcp-server": {
+      "enabled": {{ mcp.arxiv.enabled | lower }},
+      "config": {
+        "storage_path": "/data/arxiv"
+      },
+      "description": "Research paper search and analysis"
+    },
+
+    "sqlite-mcp-server": {
+      "enabled": {{ mcp.sqlite.enabled | lower }},
+      "description": "SQLite database with vector search and analytics"
+    },
+
+    "linkedin-mcp-server": {
+      "enabled": {{ mcp.linkedin.enabled | lower }},
+      "description": "LinkedIn profile scraping and job search"
+    }
+  }
+}

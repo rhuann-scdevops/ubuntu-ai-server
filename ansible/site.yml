@@ -71,6 +71,10 @@
     - role: security
       tags: [security, hardening, phase9]
 
+    # Phase 10: MCP Servers (AI Autonomy)
+    - role: mcp-servers
+      tags: [mcp, mcp-servers, ai-autonomy, phase10]
+
   post_tasks:
     - name: Display completion message
       ansible.builtin.debug:
@@ -87,6 +91,8 @@
           - Ollama API: http://{{ server_ip }}:11434
           - Prometheus: http://{{ server_ip }}:9090
           - Traefik:    http://{{ server_ip }}:8080
+          - MCP Gateway: http://{{ server_ip }}:{{ mcp.gateway_port }}
+          - Neo4j (MCP): http://{{ server_ip }}:7474
 
           GPU Status:
             nvidia-smi

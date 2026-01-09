@@ -1,0 +1,65 @@
+# =============================================================================
+# MCP Gateway Stack - Docker Compose
+# =============================================================================
+# Model Context Protocol servers for AI autonomy
+# =============================================================================
+
+version: "3.8"
+
+services:
+  # MCP Gateway - Main entry point for MCP servers
+  mcp-gateway:
+    image: mcp/gateway:latest
+    container_name: mcp-gateway
+    restart: unless-stopped
+    ports:
+      - "{{ mcp.gateway_port }}:8080"
+    volumes:
+      - {{ mcp.config_path }}:/config:ro
+      - {{ mcp.data_path }}:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - MCP_CONFIG_PATH=/config/config.json
+      - MCP_SECRETS_PATH=/config/secrets.json
+    networks:
+      - ai-network
+
+{% if mcp.neo4j.enabled %}
+  # Neo4j for persistent memory
+  neo4j-mcp:
+    image: neo4j:5-community
+    container_name: neo4j-mcp
+    restart: unless-stopped
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - {{ mcp.data_path }}/neo4j:/data
+    environment:
+      - NEO4J_AUTH=neo4j/{{ mcp.neo4j.password }}
+      - NEO4J_PLUGINS=["apoc"]
+    networks:
+      - ai-network
+{% endif %}
+
+{% if mcp.database.enabled %}
+  # PostgreSQL for database MCP
+  postgres-mcp:
+    image: postgres:16-alpine
+    container_name: postgres-mcp
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    volumes:
+      - /fast-pool/databases/postgres:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER={{ mcp.database.user | default('mcp') }}
+      - POSTGRES_PASSWORD={{ mcp.database.password | default('changeme') }}
+      - POSTGRES_DB={{ mcp.database.name | default('mcp_data') }}
+    networks:
+      - ai-network
+{% endif %}
+
+networks:
+  ai-network:
+    external: true

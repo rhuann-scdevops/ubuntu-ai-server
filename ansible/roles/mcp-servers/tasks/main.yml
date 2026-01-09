@@ -1,0 +1,144 @@
+---
+# =============================================================================
+# MCP (Model Context Protocol) Servers Deployment
+# =============================================================================
+# Deploys MCP Gateway and configures MCP servers for AI autonomy
+# =============================================================================
+
+- name: Create MCP directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ mcp.config_path }}"
+    - "{{ mcp.data_path }}"
+    - /opt/docker-compose/mcp-gateway
+
+# =============================================================================
+# MCP Gateway (Docker MCP)
+# =============================================================================
+- name: Create MCP Gateway configuration
+  ansible.builtin.template:
+    src: mcp-config.json.j2
+    dest: "{{ mcp.config_path }}/config.json"
+    mode: "0600"
+
+- name: Create MCP secrets file
+  ansible.builtin.template:
+    src: mcp-secrets.json.j2
+    dest: "{{ mcp.config_path }}/secrets.json"
+    mode: "0600"
+
+- name: Deploy MCP Gateway container
+  community.docker.docker_container:
+    name: mcp-gateway
+    image: mcp/gateway:latest
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ mcp.gateway_port }}:8080"
+    volumes:
+      - "{{ mcp.config_path }}:/config:ro"
+      - "{{ mcp.data_path }}:/data"
+      - /var/run/docker.sock:/var/run/docker.sock
+    env:
+      MCP_CONFIG_PATH: /config/config.json
+      MCP_SECRETS_PATH: /config/secrets.json
+    networks:
+      - name: ai-network
+  when: mcp.gateway.enabled
+
+# =============================================================================
+# Desktop Commander MCP (File System + Terminal)
+# =============================================================================
+- name: Note about Desktop Commander
+  ansible.builtin.debug:
+    msg: |
+      Desktop Commander MCP provides:
+      - File system access (read, write, search)
+      - Terminal command execution
+      - Process management
+
+      Configure paths in mcp-config.json
+
+# =============================================================================
+# Memory MCP (Knowledge Graph)
+# =============================================================================
+- name: Create Memory MCP data directory
+  ansible.builtin.file:
+    path: "{{ mcp.data_path }}/memory"
+    state: directory
+    mode: "0755"
+  when: mcp.memory.enabled
+
+# =============================================================================
+# Neo4j for Advanced Memory (Optional)
+# =============================================================================
+- name: Deploy Neo4j for MCP Memory
+  community.docker.docker_container:
+    name: neo4j-mcp
+    image: neo4j:5-community
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - "{{ mcp.data_path }}/neo4j:/data"
+    env:
+      NEO4J_AUTH: "neo4j/{{ mcp.neo4j.password }}"
+      NEO4J_PLUGINS: '["apoc"]'
+    networks:
+      - name: ai-network
+  when: mcp.neo4j.enabled
+
+# =============================================================================
+# Docker Compose Reference
+# =============================================================================
+- name: Create MCP stack docker-compose file
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/docker-compose/mcp-gateway/docker-compose.yml
+    mode: "0644"
+
+# =============================================================================
+# Verification
+# =============================================================================
+- name: Display MCP configuration summary
+  ansible.builtin.debug:
+    msg: |
+      ================================================
+      MCP Servers Configuration Summary
+      ================================================
+
+      Recommended MCP Servers for Maximum Autonomy:
+
+      CORE INFRASTRUCTURE:
+      1. desktop-commander - File system & terminal access
+      2. github-official   - Repository management
+      3. grafana           - Server monitoring
+      4. database-server   - PostgreSQL/SQLite access
+
+      AI & RESEARCH:
+      5. brave             - Web search
+      6. perplexity-ask    - Deep research
+      7. hugging-face      - ML models & datasets
+
+      PRODUCTIVITY:
+      8. notion            - Documentation & knowledge
+      9. slack             - Team communication
+      10. gmail-mcp        - Email integration
+
+      MEMORY & KNOWLEDGE:
+      11. memory           - Persistent knowledge graph
+      12. neo4j-memory     - Graph-based memory (advanced)
+
+      AUTOMATION:
+      13. puppeteer        - Browser automation
+      14. playwright       - Advanced web automation
+
+      ================================================
+      Configuration: {{ mcp.config_path }}/config.json
+      Secrets: {{ mcp.config_path }}/secrets.json
+      ================================================

@@ -53,6 +53,7 @@ base-system
                 └── monitoring
                     └── backup
 security (can run independently)
+mcp-servers (requires docker-setup)
 ```
 
 ## Key Variables (group_vars/all.yml)
@@ -122,6 +123,39 @@ docker run --rm --gpus all nvidia/cuda:12.2-base-ubuntu22.04 nvidia-smi
 | 9090 | Prometheus |
 | 9443 | Portainer |
 | 11434 | Ollama API |
+| 8811 | MCP Gateway |
+| 7474 | Neo4j Browser |
+| 7687 | Neo4j Bolt |
+
+## MCP Servers for AI Autonomy
+
+The server includes MCP (Model Context Protocol) servers that enable AI assistants to interact with external systems:
+
+### Core Infrastructure
+- **desktop-commander**: File system access, terminal commands, process management
+- **github-official**: Repository management, PRs, issues, code search
+- **grafana**: Server monitoring dashboards and alerts
+- **database-server**: PostgreSQL/SQLite database access
+
+### AI & Research
+- **brave**: Web search for pages, images, news
+- **perplexity-ask**: Deep research with web access
+- **hugging-face**: ML models, datasets, papers
+
+### Memory & Knowledge
+- **memory**: Basic persistent knowledge graph
+- **neo4j-memory**: Advanced graph-based memory (bolt://neo4j-mcp:7687)
+
+### Automation
+- **puppeteer**: Headless browser automation
+- **playwright**: Advanced browser automation for web tasks
+
+### Configuration Paths
+| Path | Purpose |
+|------|---------|
+| `/fast-pool/docker/mcp/config` | MCP configuration files |
+| `/fast-pool/docker/mcp/data` | MCP persistent data |
+| `/fast-pool/docker/mcp/data/neo4j` | Neo4j graph database |
 
 ## Related Repositories
 - `proxmox-ztp`: Proxmox Zero-Touch Provisioning (reference)

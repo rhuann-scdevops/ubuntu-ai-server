@@ -225,6 +225,9 @@ security:
       - { port: 9090, proto: "tcp", comment: "Prometheus" }
       - { port: 9443, proto: "tcp", comment: "Portainer" }
       - { port: 11434, proto: "tcp", comment: "Ollama" }
+      - { port: 8811, proto: "tcp", comment: "MCP Gateway" }
+      - { port: 7474, proto: "tcp", comment: "Neo4j Browser" }
+      - { port: 7687, proto: "tcp", comment: "Neo4j Bolt" }
 
   # Fail2ban
   fail2ban:
@@ -260,3 +263,136 @@ base_packages:
   - nfs-common
   - python3-pip
   - python3-venv
+
+# =============================================================================
+# MCP (Model Context Protocol) Servers Configuration
+# =============================================================================
+# MCP servers enable AI assistants to interact with external systems
+# Configure API keys in ansible-vault or secrets file
+# =============================================================================
+mcp:
+  # Paths for MCP data
+  config_path: "/fast-pool/docker/mcp/config"
+  data_path: "/fast-pool/docker/mcp/data"
+  gateway_port: 8811
+
+  # MCP Gateway
+  gateway:
+    enabled: true
+
+  # ==========================================================================
+  # CORE INFRASTRUCTURE MCPs
+  # ==========================================================================
+
+  # Desktop Commander - File system access and terminal commands
+  desktop_commander:
+    enabled: true
+    paths:
+      - "/home"
+      - "/opt"
+      - "/fast-pool"
+      - "/bulk-pool"
+      - "/var/log"
+
+  # GitHub - Repository management, PRs, issues, code search
+  github:
+    enabled: true
+    token: ""  # Set via vault: YOUR_GITHUB_PERSONAL_ACCESS_TOKEN
+
+  # Grafana - Server monitoring integration
+  grafana:
+    enabled: true
+    api_key: ""  # Set via vault: YOUR_GRAFANA_API_KEY
+
+  # Database - PostgreSQL/MySQL/SQLite access
+  database:
+    enabled: true
+    connection_string: "postgresql+asyncpg://mcp:changeme@postgres-mcp:5432/mcp_data"
+    user: "mcp"
+    password: "changeme"  # Set via vault
+    name: "mcp_data"
+
+  # Kubectl - Kubernetes management (if using K8s)
+  kubectl:
+    enabled: false
+    kubeconfig: "/root/.kube/config"
+
+  # ==========================================================================
+  # AI & RESEARCH MCPs
+  # ==========================================================================
+
+  # Brave Search - Web search for pages, images, news
+  brave:
+    enabled: true
+    api_key: ""  # Set via vault: Get from https://brave.com/search/api/
+
+  # Perplexity - Deep research with web access
+  perplexity:
+    enabled: true
+    api_key: ""  # Set via vault: Get from https://perplexity.ai/
+
+  # Hugging Face - ML models, datasets, papers
+  huggingface:
+    enabled: true
+
+  # ArXiv - Research paper search and analysis
+  arxiv:
+    enabled: true
+    storage_path: "/bulk-pool/datasets/arxiv"
+
+  # ==========================================================================
+  # PRODUCTIVITY & COMMUNICATION MCPs
+  # ==========================================================================
+
+  # Notion - Documentation and knowledge management
+  notion:
+    enabled: false
+    token: ""  # Set via vault: YOUR_NOTION_INTEGRATION_TOKEN
+
+  # Slack - Team communication
+  slack:
+    enabled: false
+    bot_token: ""  # Set via vault
+    team_id: ""
+    channel_ids: ""
+
+  # Gmail - Email integration
+  gmail:
+    enabled: false
+    email_address: ""
+    app_password: ""  # Set via vault: Google App Password
+
+  # LinkedIn - Profile scraping and job search
+  linkedin:
+    enabled: false
+    cookie: ""  # Set via vault: li_at cookie from LinkedIn
+
+  # ==========================================================================
+  # MEMORY & KNOWLEDGE MCPs
+  # ==========================================================================
+
+  # Memory - Basic knowledge graph
+  memory:
+    enabled: true
+
+  # Neo4j Memory - Advanced graph-based memory
+  neo4j:
+    enabled: true
+    password: "changeme123"  # Set via vault
+
+  # SQLite - Local database with vector search
+  sqlite:
+    enabled: true
+
+  # ==========================================================================
+  # AUTOMATION MCPs
+  # ==========================================================================
+
+  # Puppeteer - Browser automation
+  puppeteer:
+    enabled: true
+
+  # Playwright - Advanced browser automation
+  playwright:
+    enabled: true
+    data_path: "/fast-pool/docker/mcp/playwright"

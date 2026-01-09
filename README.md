@@ -51,6 +51,18 @@ Ansible automation to transform Ubuntu 24.04 LTS into a production-ready AI and 
 - **NVIDIA DCGM**: GPU metrics
 - **Loki**: Log aggregation
 
+### MCP Servers (AI Autonomy)
+- **MCP Gateway**: Central entry point for Model Context Protocol
+- **Desktop Commander**: File system access and terminal commands
+- **GitHub**: Repository management, PRs, issues, code search
+- **Grafana MCP**: Server monitoring integration
+- **Database Server**: PostgreSQL/SQLite database access
+- **Brave Search**: Web search for pages, images, news
+- **Perplexity**: Deep research with web access
+- **Hugging Face**: ML models, datasets, papers
+- **Memory/Neo4j**: Persistent knowledge graph
+- **Puppeteer/Playwright**: Browser automation
+
 ## Quick Start
 
 ### Prerequisites
@@ -120,7 +132,8 @@ ansible/
     ├── devops-tools/       # Gitea, Drone, Harbor, Traefik
     ├── monitoring/         # Prometheus, Grafana, Loki
     ├── backup/             # Automated backup solutions
-    └── security/           # Firewall, fail2ban, hardening
+    ├── security/           # Firewall, fail2ban, hardening
+    └── mcp-servers/        # MCP Gateway and AI autonomy tools
 ```
 
 ## Available Tags
@@ -136,6 +149,7 @@ ansible/
 | `monitoring` | Monitoring stack |
 | `backup` | Backup configuration |
 | `security` | Security hardening |
+| `mcp` | MCP servers for AI autonomy |
 
 ## Storage Pools
 
@@ -177,6 +191,58 @@ After deployment, services are available at:
 | Gitea | http://server:3001 | Git server |
 | Grafana | http://server:3002 | Monitoring dashboard |
 | Prometheus | http://server:9090 | Metrics |
+| MCP Gateway | http://server:8811 | AI autonomy gateway |
+| Neo4j | http://server:7474 | Graph database for MCP memory |
+
+## MCP Configuration
+
+MCP (Model Context Protocol) servers enable AI assistants like Claude to interact with external systems autonomously.
+
+### Configuring API Keys
+
+1. **Using ansible-vault** (recommended):
+```bash
+# Create vault file
+ansible-vault create ansible/inventory/vault.yml
+
+# Add your secrets
+mcp_github_token: "ghp_xxxxxxxxxxxx"
+mcp_brave_api_key: "BSA-xxxxxxxxxxxx"
+mcp_perplexity_api_key: "pplx-xxxxxxxxxxxx"
+mcp_grafana_api_key: "glsa_xxxxxxxxxxxx"
+```
+
+2. **Or edit group_vars/all.yml directly** (not recommended for production):
+```yaml
+mcp:
+  github:
+    token: "YOUR_GITHUB_PAT"
+  brave:
+    api_key: "YOUR_BRAVE_API_KEY"
+  # etc.
+```
+
+### Enabled MCP Servers
+
+| Server | Purpose | API Key Required |
+|--------|---------|-----------------|
+| desktop-commander | File system & terminal | No |
+| github-official | Repository management | Yes (GitHub PAT) |
+| grafana | Server monitoring | Yes (Grafana API key) |
+| brave | Web search | Yes (Brave Search API) |
+| perplexity-ask | Deep research | Yes (Perplexity API) |
+| hugging-face | ML models & datasets | No |
+| memory | Knowledge graph | No |
+| neo4j-memory | Graph-based memory | No (self-hosted) |
+| puppeteer | Browser automation | No |
+| playwright | Advanced automation | No |
+
+### Getting API Keys
+
+- **GitHub**: Settings → Developer settings → Personal access tokens
+- **Brave Search**: https://brave.com/search/api/
+- **Perplexity**: https://perplexity.ai/ (API settings)
+- **Grafana**: Configuration → API keys (self-hosted)
 
 ## GPU Utilization
 
