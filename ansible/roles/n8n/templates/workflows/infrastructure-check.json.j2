@@ -1,0 +1,238 @@
+{
+  "name": "Infrastructure Health Check",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Hourly Check",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://ollama:11434/api/tags",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "check-ollama",
+      "name": "Check Ollama",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [470, 200],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://qdrant:6333/readyz",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "check-qdrant",
+      "name": "Check Qdrant",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [470, 350],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://rag-ingestion:8000/health",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "check-rag-ingestion",
+      "name": "Check RAG Ingestion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [470, 500],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "id": "merge-results",
+      "name": "Merge Results",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [690, 350]
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.all();\n\nconst status = {\n  timestamp: new Date().toISOString(),\n  services: {\n    ollama: {\n      status: results[0]?.json?.models ? 'healthy' : 'unhealthy',\n      models: results[0]?.json?.models?.length || 0\n    },\n    qdrant: {\n      status: results[1]?.json === true || results[1]?.response?.statusCode === 200 ? 'healthy' : 'unhealthy'\n    },\n    rag_ingestion: {\n      status: results[2]?.json?.status === 'healthy' ? 'healthy' : 'unhealthy',\n      details: results[2]?.json || {}\n    }\n  }\n};\n\nconst unhealthy = Object.entries(status.services)\n  .filter(([_, v]) => v.status === 'unhealthy')\n  .map(([k, _]) => k);\n\nstatus.overall = unhealthy.length === 0 ? 'healthy' : 'degraded';\nstatus.unhealthy_services = unhealthy;\n\nreturn [{ json: status }];"
+      },
+      "id": "aggregate-status",
+      "name": "Aggregate Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [910, 350]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.overall }}",
+              "operation": "equals",
+              "value2": "degraded"
+            }
+          ]
+        }
+      },
+      "id": "check-degraded",
+      "name": "Is Degraded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1130, 350]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/chat",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"llama3.2:8b\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a DevOps assistant. Provide brief troubleshooting steps for the following service issues.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"The following services are unhealthy: {{ $json.unhealthy_services.join(', ') }}. What should I check?\"\n    }\n  ],\n  \"stream\": false\n}",
+        "options": {}
+      },
+      "id": "ai-troubleshoot",
+      "name": "AI Troubleshoot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1350, 250],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {},
+      "id": "no-op",
+      "name": "All Healthy",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1350, 450]
+    }
+  ],
+  "connections": {
+    "Hourly Check": {
+      "main": [
+        [
+          {
+            "node": "Check Ollama",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check Qdrant",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check RAG Ingestion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Ollama": {
+      "main": [
+        [
+          {
+            "node": "Merge Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Qdrant": {
+      "main": [
+        [
+          {
+            "node": "Merge Results",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Check RAG Ingestion": {
+      "main": [
+        [
+          {
+            "node": "Merge Results",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge Results": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Status": {
+      "main": [
+        [
+          {
+            "node": "Is Degraded?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Degraded?": {
+      "main": [
+        [
+          {
+            "node": "AI Troubleshoot",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "All Healthy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "infrastructure"
+    },
+    {
+      "name": "monitoring"
+    }
+  ]
+}

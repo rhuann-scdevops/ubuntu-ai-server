@@ -228,6 +228,15 @@ security:
       - { port: 8811, proto: "tcp", comment: "MCP Gateway" }
       - { port: 7474, proto: "tcp", comment: "Neo4j Browser" }
       - { port: 7687, proto: "tcp", comment: "Neo4j Bolt" }
+      # RAG Stack ports
+      - { port: 6333, proto: "tcp", comment: "Qdrant HTTP" }
+      - { port: 6334, proto: "tcp", comment: "Qdrant gRPC" }
+      - { port: 8085, proto: "tcp", comment: "Docling API" }
+      - { port: 8086, proto: "tcp", comment: "Open Interpreter" }
+      - { port: 8087, proto: "tcp", comment: "RAG Ingestion" }
+      # n8n ports
+      - { port: 5678, proto: "tcp", comment: "n8n UI" }
+      - { port: 5679, proto: "tcp", comment: "n8n Webhooks" }
 
   # Fail2ban
   fail2ban:
@@ -396,3 +405,95 @@ mcp:
   playwright:
     enabled: true
     data_path: "/fast-pool/docker/mcp/playwright"
+
+# =============================================================================
+# RAG Stack Configuration (Personal RAG Assistant)
+# =============================================================================
+# Components for document ingestion, vector storage, and RAG-based retrieval
+# =============================================================================
+rag_stack:
+  # Base paths
+  data_path: "/fast-pool/docker/rag"
+  documents_path: "/bulk-pool/datasets/documents"
+
+  # Qdrant Vector Database
+  qdrant:
+    enabled: true
+    version: "latest"
+    port: 6333
+    grpc_port: 6334
+    host: "qdrant"
+
+  # Docling Document Parser API
+  docling:
+    enabled: true
+    image: "ds4sd/docling-serve:latest"
+    port: 8085
+
+  # Open Interpreter (Code Execution Sandbox)
+  interpreter:
+    enabled: true
+    image: "openinterpreter/open-interpreter:latest"
+    port: 8086
+    default_model: "codellama:13b"
+    gpu_enabled: false  # Set true if you want GPU for code generation
+
+  # AnythingLLM (Alternative RAG UI to OpenWebUI)
+  anythingllm:
+    enabled: false  # Enable if you prefer AnythingLLM over OpenWebUI RAG
+    version: "latest"
+    port: 3005
+    default_model: "llama3.2:8b"
+    auth_token: ""  # Set via vault
+    jwt_secret: ""  # Set via vault
+
+  # RAG Ingestion Service (Custom FastAPI)
+  ingestion:
+    port: 8087
+
+  # Document vendor categories
+  vendor_docs:
+    - cisco
+    - paloalto
+    - juniper
+    - versa
+    - satellite
+    - configs
+
+  # Chunking configuration
+  chunk_size: 512
+  chunk_overlap: 64
+  min_chunk_size: 100
+  max_chunk_size: 1024
+  collection_name: "documents"
+
+  # Retrieval configuration
+  default_top_k: 5
+  reranking_enabled: false
+
+# =============================================================================
+# n8n Workflow Automation Configuration
+# =============================================================================
+# n8n provides workflow automation for:
+#   - GitHub PR automation
+#   - Infrastructure monitoring
+#   - RAG query orchestration
+#   - Multi-service integrations
+# =============================================================================
+n8n:
+  enabled: true
+  version: "latest"
+  port: 5678
+  webhook_port: 5679
+  data_path: "/fast-pool/docker/n8n"
+
+  # Database (PostgreSQL recommended for production)
+  use_postgres: true
+  db_user: "n8n"
+  db_password: "changeme"  # Override in vault
+  db_name: "n8n"
+
+  # Authentication
+  basic_auth_enabled: true
+  basic_auth_user: "admin"
+  basic_auth_password: "changeme"  # Override in vault

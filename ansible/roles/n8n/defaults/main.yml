@@ -1,0 +1,24 @@
+---
+# =============================================================================
+# n8n Role Defaults
+# =============================================================================
+# These values can be overridden in group_vars/all.yml
+# =============================================================================
+
+n8n:
+  enabled: true
+  version: "latest"
+  port: 5678
+  webhook_port: 5679
+  data_path: "/fast-pool/docker/n8n"
+
+  # Database configuration
+  use_postgres: true
+  db_user: "n8n"
+  db_password: "changeme"  # Override in vault
+  db_name: "n8n"
+
+  # Authentication
+  basic_auth_enabled: true
+  basic_auth_user: "admin"
+  basic_auth_password: "changeme"  # Override in vault

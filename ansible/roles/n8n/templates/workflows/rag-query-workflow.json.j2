@@ -1,0 +1,147 @@
+{
+  "name": "RAG Query Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rag-query",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Query Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://rag-ingestion:8000/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"query\": \"{{ $json.query }}\",\n  \"top_k\": {{ $json.top_k || 5 }},\n  \"filter_vendor\": \"{{ $json.vendor || '' }}\"\n}",
+        "options": {}
+      },
+      "id": "search-rag",
+      "name": "Search RAG",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format retrieved contexts for the LLM\nconst results = $input.first().json.results || [];\n\nlet context = '';\nfor (const result of results) {\n  context += `### Source: ${result.metadata.file_name || 'Unknown'}\\n`;\n  context += `${result.text}\\n\\n`;\n}\n\nreturn [{\n  json: {\n    query: $('Query Webhook').first().json.query,\n    context: context,\n    sources: results.map(r => ({\n      file: r.metadata.file_name,\n      vendor: r.metadata.vendor,\n      score: r.score\n    }))\n  }\n}];"
+      },
+      "id": "format-context",
+      "name": "Format Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/chat",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"llama3.2:8b\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a helpful technical assistant. Answer questions based ONLY on the provided context. If the context doesn't contain relevant information, say so. Always cite your sources.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Context:\\n{{ $json.context }}\\n\\n---\\n\\nQuestion: {{ $json.query }}\"\n    }\n  ],\n  \"stream\": false\n}",
+        "options": {}
+      },
+      "id": "llm-generate",
+      "name": "Generate Answer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [910, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const answer = $input.first().json.message?.content || 'No answer generated';\nconst sources = $('Format Context').first().json.sources || [];\n\nreturn [{\n  json: {\n    query: $('Query Webhook').first().json.query,\n    answer: answer,\n    sources: sources\n  }\n}];"
+      },
+      "id": "format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1130, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "respond-webhook",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1350, 300]
+    }
+  ],
+  "connections": {
+    "Query Webhook": {
+      "main": [
+        [
+          {
+            "node": "Search RAG",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search RAG": {
+      "main": [
+        [
+          {
+            "node": "Format Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Context": {
+      "main": [
+        [
+          {
+            "node": "Generate Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Answer": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "rag"
+    },
+    {
+      "name": "ai"
+    }
+  ]
+}
