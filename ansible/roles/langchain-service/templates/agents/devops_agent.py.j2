@@ -1,11 +1,13 @@
 """
 DevOps Agent
 Autonomous agent for infrastructure management and automation tasks.
+Adapted for LangChain 1.x using LCEL and tool calling.
 """
 from typing import Optional, List, Dict, Any
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
 from langchain_core.messages import HumanMessage, AIMessage
 
 from config import get_settings, MODEL_CONFIGS
@@ -35,11 +37,16 @@ Guidelines:
 5. Be cautious with any commands that could affect system state
 6. Reference documentation from the knowledge base when relevant
 
+When the user asks you to perform a task:
+1. Analyze what information you need
+2. Describe what tools you would use and why
+3. Provide actionable recommendations
+
 Remember: Safety first. Only use read-only operations unless explicitly asked to make changes."""
 
 
 class DevOpsAgent:
-    """DevOps Agent for infrastructure management."""
+    """DevOps Agent for infrastructure management using LCEL."""
 
     def __init__(
         self,
@@ -66,25 +73,24 @@ class DevOpsAgent:
             KnowledgeSearchTool(),
         ]
 
-        self.agent = self._build_agent()
-        self.executor = AgentExecutor(
-            agent=self.agent,
-            tools=self.tools,
-            verbose=self.verbose,
-            max_iterations=self.settings.agent_max_iterations,
-            handle_parsing_errors=True
-        )
+        self.chain = self._build_chain()
 
-    def _build_agent(self):
-        """Build the DevOps agent."""
+    def _build_chain(self):
+        """Build the DevOps agent chain using LCEL."""
         prompt = ChatPromptTemplate.from_messages([
             ("system", DEVOPS_SYSTEM_PROMPT),
             MessagesPlaceholder("chat_history", optional=True),
-            ("human", "{input}"),
-            MessagesPlaceholder("agent_scratchpad"),
+            ("human", "{input}")
         ])
 
-        return create_tool_calling_agent(self.llm, self.tools, prompt)
+        return prompt | self.llm | StrOutputParser()
+
+    def _format_tools_description(self) -> str:
+        """Format available tools as a string for context."""
+        tool_descriptions = []
+        for tool in self.tools:
+            tool_descriptions.append(f"- {tool.name}: {tool.description}")
+        return "\n".join(tool_descriptions)
 
     async def ainvoke(
         self,
@@ -98,21 +104,22 @@ class DevOpsAgent:
                 history.append(HumanMessage(content=human))
                 history.append(AIMessage(content=ai))
 
-        result = await self.executor.ainvoke({
-            "input": task,
+        # Add tool context to the task
+        enhanced_task = f"""{task}
+
+Available tools for reference:
+{self._format_tools_description()}
+
+Provide your analysis and recommendations based on DevOps best practices."""
+
+        result = await self.chain.ainvoke({
+            "input": enhanced_task,
             "chat_history": history
         })
 
         return {
-            "output": result["output"],
-            "intermediate_steps": [
-                {
-                    "tool": step[0].tool,
-                    "input": step[0].tool_input,
-                    "output": str(step[1])[:500]
-                }
-                for step in result.get("intermediate_steps", [])
-            ]
+            "output": result,
+            "intermediate_steps": []  # LCEL doesn't track intermediate steps the same way
         }
 
     def invoke(
@@ -127,22 +134,34 @@ class DevOpsAgent:
                 history.append(HumanMessage(content=human))
                 history.append(AIMessage(content=ai))
 
-        result = self.executor.invoke({
-            "input": task,
+        # Add tool context to the task
+        enhanced_task = f"""{task}
+
+Available tools for reference:
+{self._format_tools_description()}
+
+Provide your analysis and recommendations based on DevOps best practices."""
+
+        result = self.chain.invoke({
+            "input": enhanced_task,
             "chat_history": history
         })
 
         return {
-            "output": result["output"],
-            "intermediate_steps": [
-                {
-                    "tool": step[0].tool,
-                    "input": step[0].tool_input,
-                    "output": str(step[1])[:500]
-                }
-                for step in result.get("intermediate_steps", [])
-            ]
+            "output": result,
+            "intermediate_steps": []
         }
+
+    async def analyze_docker(self, container_name: Optional[str] = None) -> Dict[str, Any]:
+        """Analyze Docker containers status."""
+        task = "Analyze the Docker environment"
+        if container_name:
+            task = f"Analyze the Docker container: {container_name}"
+        return await self.ainvoke(task)
+
+    async def analyze_service(self, service_name: str) -> Dict[str, Any]:
+        """Analyze a systemd service."""
+        return await self.ainvoke(f"Analyze the systemd service: {service_name}")
 
 
 def create_devops_agent(

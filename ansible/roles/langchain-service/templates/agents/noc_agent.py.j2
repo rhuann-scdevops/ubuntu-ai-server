@@ -1,11 +1,13 @@
 """
 NOC (Network Operations Center) Agent
 Specialized agent for network troubleshooting and operations.
+Adapted for LangChain 1.x using LCEL.
 """
 from typing import Optional, List, Dict, Any
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
 from langchain_core.messages import HumanMessage, AIMessage
 
 from config import get_settings, MODEL_CONFIGS
@@ -51,7 +53,7 @@ Always prioritize service restoration over root cause analysis in critical situa
 
 
 class NOCAgent:
-    """NOC Agent for network troubleshooting and operations."""
+    """NOC Agent for network troubleshooting and operations using LCEL."""
 
     def __init__(
         self,
@@ -79,25 +81,24 @@ class NOCAgent:
             KnowledgeSearchTool(),
         ]
 
-        self.agent = self._build_agent()
-        self.executor = AgentExecutor(
-            agent=self.agent,
-            tools=self.tools,
-            verbose=self.verbose,
-            max_iterations=self.settings.agent_max_iterations,
-            handle_parsing_errors=True
-        )
+        self.chain = self._build_chain()
 
-    def _build_agent(self):
-        """Build the NOC agent."""
+    def _build_chain(self):
+        """Build the NOC agent chain using LCEL."""
         prompt = ChatPromptTemplate.from_messages([
             ("system", NOC_SYSTEM_PROMPT),
             MessagesPlaceholder("chat_history", optional=True),
-            ("human", "{input}"),
-            MessagesPlaceholder("agent_scratchpad"),
+            ("human", "{input}")
         ])
 
-        return create_tool_calling_agent(self.llm, self.tools, prompt)
+        return prompt | self.llm | StrOutputParser()
+
+    def _format_tools_description(self) -> str:
+        """Format available tools as a string for context."""
+        tool_descriptions = []
+        for tool in self.tools:
+            tool_descriptions.append(f"- {tool.name}: {tool.description}")
+        return "\n".join(tool_descriptions)
 
     async def ainvoke(
         self,
@@ -111,21 +112,22 @@ class NOCAgent:
                 history.append(HumanMessage(content=human))
                 history.append(AIMessage(content=ai))
 
-        result = await self.executor.ainvoke({
-            "input": task,
+        # Add tool context to the task
+        enhanced_task = f"""{task}
+
+Available tools for reference:
+{self._format_tools_description()}
+
+Provide your analysis following the NOC troubleshooting methodology."""
+
+        result = await self.chain.ainvoke({
+            "input": enhanced_task,
             "chat_history": history
         })
 
         return {
-            "output": result["output"],
-            "intermediate_steps": [
-                {
-                    "tool": step[0].tool,
-                    "input": step[0].tool_input,
-                    "output": str(step[1])[:500]
-                }
-                for step in result.get("intermediate_steps", [])
-            ]
+            "output": result,
+            "intermediate_steps": []
         }
 
     def invoke(
@@ -140,21 +142,22 @@ class NOCAgent:
                 history.append(HumanMessage(content=human))
                 history.append(AIMessage(content=ai))
 
-        result = self.executor.invoke({
-            "input": task,
+        # Add tool context to the task
+        enhanced_task = f"""{task}
+
+Available tools for reference:
+{self._format_tools_description()}
+
+Provide your analysis following the NOC troubleshooting methodology."""
+
+        result = self.chain.invoke({
+            "input": enhanced_task,
             "chat_history": history
         })
 
         return {
-            "output": result["output"],
-            "intermediate_steps": [
-                {
-                    "tool": step[0].tool,
-                    "input": step[0].tool_input,
-                    "output": str(step[1])[:500]
-                }
-                for step in result.get("intermediate_steps", [])
-            ]
+            "output": result,
+            "intermediate_steps": []
         }
 
     async def troubleshoot(self, issue: str) -> Dict[str, Any]:
@@ -173,6 +176,28 @@ Follow this methodology:
 Provide a structured analysis with findings and recommendations."""
 
         result = await self.ainvoke(troubleshoot_prompt)
+        return {
+            "issue": issue,
+            "analysis": result["output"],
+            "steps_taken": result["intermediate_steps"]
+        }
+
+    def troubleshoot_sync(self, issue: str) -> Dict[str, Any]:
+        """Sync structured troubleshooting workflow."""
+        troubleshoot_prompt = f"""Perform a systematic troubleshooting for the following issue:
+
+{issue}
+
+Follow this methodology:
+1. First, search the knowledge base for relevant documentation
+2. Check connectivity to affected systems
+3. Review any available logs
+4. Identify potential causes
+5. Recommend specific actions
+
+Provide a structured analysis with findings and recommendations."""
+
+        result = self.invoke(troubleshoot_prompt)
         return {
             "issue": issue,
             "analysis": result["output"],

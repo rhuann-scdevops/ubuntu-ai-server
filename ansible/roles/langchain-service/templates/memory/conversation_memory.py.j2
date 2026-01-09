@@ -1,26 +1,24 @@
 """
 Conversation Memory Management
 Memory implementations for maintaining conversation context.
+Adapted for LangChain 1.x using core message types.
 """
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 import json
 from pathlib import Path
+from collections import deque
 
-from langchain.memory import (
-    ConversationBufferMemory,
-    ConversationBufferWindowMemory,
-    ConversationSummaryMemory,
-    ConversationSummaryBufferMemory,
-)
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage, SystemMessage
 from langchain_ollama import ChatOllama
-from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
 from config import get_settings
 
 
 class MemoryManager:
-    """Memory manager for conversation context."""
+    """Memory manager for conversation context using LangChain 1.x patterns."""
 
     def __init__(
         self,
@@ -33,90 +31,107 @@ class MemoryManager:
         self.memory_key = memory_key
         self.kwargs = kwargs
 
-        self.memory = self._create_memory()
+        # Store messages directly
+        self._messages: List[BaseMessage] = []
 
-    def _create_memory(self):
-        """Create the appropriate memory instance."""
-        if self.memory_type == "buffer":
-            return ConversationBufferMemory(
-                memory_key=self.memory_key,
-                return_messages=True
-            )
+        # For window memory
+        self._k = kwargs.get("k", self.settings.memory_k)
 
-        elif self.memory_type == "buffer_window":
-            k = self.kwargs.get("k", self.settings.memory_k)
-            return ConversationBufferWindowMemory(
-                memory_key=self.memory_key,
-                return_messages=True,
-                k=k
-            )
+        # For summary memory
+        self._summary = ""
+        self._max_token_limit = kwargs.get("max_token_limit", self.settings.max_token_limit)
 
-        elif self.memory_type == "summary":
-            llm = ChatOllama(
+        # LLM for summarization
+        if memory_type in ["summary", "summary_buffer"]:
+            self._llm = ChatOllama(
                 base_url=self.settings.ollama_url,
                 model=self.settings.default_chat_model,
                 temperature=0
             )
-            return ConversationSummaryMemory(
-                memory_key=self.memory_key,
-                return_messages=True,
-                llm=llm
-            )
-
-        elif self.memory_type == "summary_buffer":
-            llm = ChatOllama(
-                base_url=self.settings.ollama_url,
-                model=self.settings.default_chat_model,
-                temperature=0
-            )
-            max_token_limit = self.kwargs.get(
-                "max_token_limit",
-                self.settings.max_token_limit
-            )
-            return ConversationSummaryBufferMemory(
-                memory_key=self.memory_key,
-                return_messages=True,
-                llm=llm,
-                max_token_limit=max_token_limit
-            )
-
-        else:
-            raise ValueError(f"Unknown memory type: {self.memory_type}")
 
     def add_message(self, human_input: str, ai_output: str):
         """Add a conversation exchange to memory."""
-        self.memory.save_context(
-            {"input": human_input},
-            {"output": ai_output}
+        self._messages.append(HumanMessage(content=human_input))
+        self._messages.append(AIMessage(content=ai_output))
+
+        # Handle memory type specific logic
+        if self.memory_type == "buffer_window":
+            # Keep only last k exchanges (k * 2 messages)
+            max_messages = self._k * 2
+            if len(self._messages) > max_messages:
+                self._messages = self._messages[-max_messages:]
+
+        elif self.memory_type == "summary":
+            # Summarize all messages
+            self._update_summary()
+
+        elif self.memory_type == "summary_buffer":
+            # Summarize when exceeding token limit (approximate)
+            total_chars = sum(len(m.content) for m in self._messages)
+            # Rough estimate: 4 chars per token
+            if total_chars / 4 > self._max_token_limit:
+                self._update_summary()
+                # Keep only recent messages after summarization
+                self._messages = self._messages[-4:]
+
+    def _update_summary(self):
+        """Update the conversation summary."""
+        if not self._messages:
+            return
+
+        history_text = self.get_buffer_string()
+
+        summary_prompt = ChatPromptTemplate.from_template(
+            """Progressively summarize the conversation below, keeping key information:
+
+Current summary: {current_summary}
+
+New conversation:
+{history}
+
+Updated summary:"""
         )
+
+        chain = summary_prompt | self._llm | StrOutputParser()
+        self._summary = chain.invoke({
+            "current_summary": self._summary or "No previous summary.",
+            "history": history_text
+        })
 
     def get_history(self) -> List[BaseMessage]:
         """Get conversation history as messages."""
-        return self.memory.load_memory_variables({})[self.memory_key]
+        if self.memory_type == "summary" and self._summary:
+            return [SystemMessage(content=f"Conversation summary: {self._summary}")]
+        elif self.memory_type == "summary_buffer" and self._summary:
+            return [SystemMessage(content=f"Previous summary: {self._summary}")] + self._messages
+        return self._messages.copy()
 
     def get_history_as_tuples(self) -> List[tuple]:
         """Get conversation history as list of (human, ai) tuples."""
-        messages = self.get_history()
         history = []
-        for i in range(0, len(messages) - 1, 2):
-            if i + 1 < len(messages):
-                human = messages[i].content if isinstance(messages[i], HumanMessage) else ""
-                ai = messages[i + 1].content if isinstance(messages[i + 1], AIMessage) else ""
+        for i in range(0, len(self._messages) - 1, 2):
+            if i + 1 < len(self._messages):
+                human = self._messages[i].content if isinstance(self._messages[i], HumanMessage) else ""
+                ai = self._messages[i + 1].content if isinstance(self._messages[i + 1], AIMessage) else ""
                 history.append((human, ai))
         return history
 
     def clear(self):
         """Clear conversation history."""
-        self.memory.clear()
+        self._messages = []
+        self._summary = ""
 
     def get_buffer_string(self) -> str:
         """Get formatted conversation history as string."""
-        messages = self.get_history()
         lines = []
-        for msg in messages:
+        for msg in self._messages:
             role = "Human" if isinstance(msg, HumanMessage) else "AI"
             lines.append(f"{role}: {msg.content}")
         return "\n".join(lines)
+
+    def get_context_dict(self) -> Dict[str, Any]:
+        """Get memory variables as dict for use in chains."""
+        return {self.memory_key: self.get_history()}
 
 
 class ConversationStore:
@@ -176,6 +191,34 @@ class ConversationStore:
             file_path.unlink()
             return True
         return False
+
+    def add_message_to_conversation(
+        self,
+        session_id: str,
+        role: str,
+        content: str
+    ):
+        """Add a message to an existing conversation."""
+        conversation = self.load_conversation(session_id)
+        if conversation is None:
+            conversation = {
+                "session_id": session_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "messages": [],
+                "metadata": {}
+            }
+
+        conversation["messages"].append({
+            "role": role,
+            "content": content,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+
+        self.save_conversation(
+            session_id,
+            conversation["messages"],
+            conversation.get("metadata")
+        )
 
 
 def create_memory(
