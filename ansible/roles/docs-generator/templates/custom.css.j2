@@ -1,0 +1,125 @@
+/* =============================================================================
+   Custom CSS for AI-Generated Documentation
+   ============================================================================= */
+
+/* Generated document indicator */
+.md-content article::before {
+  content: "";
+  display: block;
+}
+
+/* Improve code block styling */
+.highlight code {
+  font-size: 0.85em;
+}
+
+/* Better table styling */
+.md-typeset table:not([class]) {
+  border: 1px solid var(--md-typeset-table-color);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.md-typeset table:not([class]) th {
+  background-color: var(--md-primary-fg-color);
+  color: var(--md-primary-bg-color);
+}
+
+/* Admonition customization */
+.md-typeset .admonition.ai-generated,
+.md-typeset details.ai-generated {
+  border-color: #7c4dff;
+}
+
+.md-typeset .ai-generated > .admonition-title,
+.md-typeset .ai-generated > summary {
+  background-color: rgba(124, 77, 255, 0.1);
+}
+
+.md-typeset .ai-generated > .admonition-title::before,
+.md-typeset .ai-generated > summary::before {
+  background-color: #7c4dff;
+  -webkit-mask-image: var(--md-admonition-icon--info);
+  mask-image: var(--md-admonition-icon--info);
+}
+
+/* Card grid for navigation */
+.grid.cards > ul > li {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 8px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.grid.cards > ul > li:hover {
+  border-color: var(--md-accent-fg-color);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* Vendor tags */
+.vendor-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  margin: 2px;
+  border-radius: 4px;
+  font-size: 0.75em;
+  font-weight: 500;
+}
+
+.vendor-tag.cisco {
+  background-color: #049fd9;
+  color: white;
+}
+
+.vendor-tag.paloalto {
+  background-color: #fa582d;
+  color: white;
+}
+
+.vendor-tag.juniper {
+  background-color: #84b135;
+  color: white;
+}
+
+.vendor-tag.versa {
+  background-color: #00a0df;
+  color: white;
+}
+
+/* Generation metadata */
+.generation-meta {
+  background-color: var(--md-code-bg-color);
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 0.85em;
+  margin-bottom: 1em;
+}
+
+.generation-meta dt {
+  font-weight: 600;
+  display: inline;
+}
+
+.generation-meta dd {
+  display: inline;
+  margin-left: 0.5em;
+}
+
+/* Mermaid diagram improvements */
+.mermaid {
+  text-align: center;
+  margin: 1em 0;
+}
+
+/* Print styles */
+@media print {
+  .md-header,
+  .md-sidebar,
+  .md-footer {
+    display: none;
+  }
+
+  .md-content {
+    margin: 0;
+    padding: 0;
+  }
+}

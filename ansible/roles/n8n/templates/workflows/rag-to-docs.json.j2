@@ -1,0 +1,192 @@
+{
+  "name": "RAG to Documentation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "rag-to-docs",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "rag-to-docs"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://rag-ingestion:8087/search",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $json.body.query }}"
+            },
+            {
+              "name": "top_k",
+              "value": "={{ $json.body.top_k || 5 }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "rag-search",
+      "name": "RAG Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine RAG results into context\nconst ragResults = $input.first().json.results || [];\nconst webhookData = $('Webhook Trigger').first().json.body;\n\nconst context = ragResults.map(r => {\n  const source = r.metadata?.source || 'Unknown';\n  const vendor = r.metadata?.vendor || '';\n  return `### Source: ${source}${vendor ? ` (${vendor})` : ''}\\n\\n${r.text}`;\n}).join('\\n\\n---\\n\\n');\n\nreturn {\n  query: webhookData.query,\n  title: webhookData.title || 'Generated Documentation',\n  category: webhookData.category || 'guides',\n  vendors: webhookData.vendors || [],\n  context: context || 'No specific documentation found.',\n  rag_chunks: ragResults.length\n};"
+      },
+      "id": "prepare-context",
+      "name": "Prepare Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"{{ '{{' }} $json.model || 'llama3.2:8b' {{ '}}' }}\",\n  \"prompt\": \"You are a technical documentation writer. Generate comprehensive Markdown documentation.\\n\\nContext:\\n{{ '{{' }} $json.context {{ '}}' }}\\n\\n---\\n\\nGenerate a detailed {{ '{{' }} $json.category {{ '}}' }} document titled '{{ '{{' }} $json.title {{ '}}' }}' about:\\n{{ '{{' }} $json.query {{ '}}' }}\\n\\nInclude:\\n- Clear overview section\\n- Detailed step-by-step instructions\\n- Code examples with proper syntax highlighting\\n- Configuration samples\\n- Troubleshooting tips\\n- Best practices\\n\\nOutput ONLY the Markdown content.\",\n  \"stream\": false,\n  \"options\": {\n    \"temperature\": 0.3,\n    \"num_predict\": 4096\n  }\n}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "ollama-generate",
+      "name": "Generate with Ollama",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format the generated content with metadata\nconst generated = $input.first().json.response;\nconst context = $('Prepare Context').first().json;\n\nconst timestamp = new Date().toISOString();\nconst filename = context.title\n  .toLowerCase()\n  .replace(/[^a-z0-9]+/g, '-')\n  .replace(/-+/g, '-')\n  .replace(/^-|-$/g, '') + '.md';\n\n// Add metadata header\nconst content = `# ${context.title}\n\n> **Generated**: ${timestamp}  \n> **Source**: RAG Query  \n${context.vendors.length > 0 ? `> **Vendors**: ${context.vendors.join(', ')}  ` : ''}\n> **RAG Chunks**: ${context.rag_chunks}\n\n---\n\n${generated}\n\n---\n\n!!! info \"AI-Generated Content\"\n    This document was automatically generated from RAG context.\n    Please review and verify before using in production.\n`;\n\nreturn {\n  filename: filename,\n  category: context.category,\n  title: context.title,\n  content: content,\n  vendors: context.vendors,\n  timestamp: timestamp,\n  rag_chunks: context.rag_chunks\n};"
+      },
+      "id": "format-output",
+      "name": "Format Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://docs-api:8089/publish",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"filename\": \"{{ '{{' }} $json.filename {{ '}}' }}\",\n  \"category\": \"{{ '{{' }} $json.category {{ '}}' }}\",\n  \"content\": {{ '{{' }} JSON.stringify($json.content) {{ '}}' }},\n  \"commit\": true,\n  \"commit_message\": \"[docs-gen] Add {{ '{{' }} $json.title {{ '}}' }}\"\n}",
+        "options": {}
+      },
+      "id": "publish-doc",
+      "name": "Publish Document",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={\n  \"success\": true,\n  \"document\": {\n    \"title\": \"{{ '{{' }} $('Format Output').first().json.title {{ '}}' }}\",\n    \"filename\": \"{{ '{{' }} $('Format Output').first().json.filename {{ '}}' }}\",\n    \"category\": \"{{ '{{' }} $('Format Output').first().json.category {{ '}}' }}\",\n    \"url\": \"http://{{ server_ip }}:{{ docs_generator.port | default(8088) }}/{{ '{{' }} $('Format Output').first().json.category {{ '}}' }}/{{ '{{' }} $('Format Output').first().json.filename.replace('.md', '') {{ '}}' }}/\"\n  },\n  \"metadata\": {\n    \"rag_chunks_used\": {{ '{{' }} $('Format Output').first().json.rag_chunks {{ '}}' }},\n    \"generated_at\": \"{{ '{{' }} $('Format Output').first().json.timestamp {{ '}}' }}\",\n    \"committed\": {{ '{{' }} $json.committed || false {{ '}}' }}\n  }\n}",
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1450, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "RAG Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RAG Search": {
+      "main": [
+        [
+          {
+            "node": "Prepare Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Context": {
+      "main": [
+        [
+          {
+            "node": "Generate with Ollama",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate with Ollama": {
+      "main": [
+        [
+          {
+            "node": "Format Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Output": {
+      "main": [
+        [
+          {
+            "node": "Publish Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish Document": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "rag",
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z"
+    },
+    {
+      "name": "docs",
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z"
+    }
+  ]
+}

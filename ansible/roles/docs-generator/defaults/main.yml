@@ -1,0 +1,106 @@
+---
+# =============================================================================
+# Docs Generator - Default Variables
+# =============================================================================
+# MkDocs Material static site generator for RAG-generated documentation
+# =============================================================================
+
+# Documentation site settings
+docs_generator:
+  enabled: true
+  port: 8088
+  live_reload_port: 8089
+  data_path: "{{ rag_stack.data_path | default('/fast-pool/docker/rag') }}/docs"
+
+  # Site configuration
+  site:
+    name: "AI-Generated Documentation"
+    description: "Technical documentation generated from RAG queries"
+    author: "{{ server_hostname | default('AI Server') }}"
+    repo_url: ""  # Optional: GitHub repo for docs
+    repo_name: ""
+
+  # MkDocs Material theme settings
+  theme:
+    palette:
+      primary: "indigo"
+      accent: "indigo"
+    features:
+      - navigation.instant
+      - navigation.tracking
+      - navigation.tabs
+      - navigation.sections
+      - navigation.expand
+      - search.suggest
+      - search.highlight
+      - content.code.copy
+      - content.tabs.link
+
+  # Document categories (auto-created as nav sections)
+  categories:
+    - name: "Runbooks"
+      path: "runbooks"
+      description: "Operational runbooks and procedures"
+    - name: "Guides"
+      path: "guides"
+      description: "Step-by-step configuration guides"
+    - name: "References"
+      path: "references"
+      description: "Technical reference documentation"
+    - name: "Troubleshooting"
+      path: "troubleshooting"
+      description: "Problem resolution guides"
+
+  # Git integration for version control
+  git:
+    enabled: true
+    auto_commit: true
+    branch: "main"
+    commit_message_prefix: "[docs-gen]"
+
+  # Build settings
+  build:
+    strict: false
+    dev_addr: "0.0.0.0:8088"
+
+  # Plugins
+  plugins:
+    - search
+    - git-revision-date-localized
+    - minify
+
+# Markdown generation settings (for RAG → Markdown)
+markdown_generation:
+  # Default template for generated docs
+  template: |
+    # {{ title }}
+
+    > Generated: {{ timestamp }}
+    > Source: RAG Query
+    > Vendors: {{ vendors | join(', ') }}
+
+    ## Overview
+
+    {{ overview }}
+
+    ## Details
+
+    {{ content }}
+
+    ## Related Topics
+
+    {{ related_topics }}
+
+    ---
+    *This document was auto-generated from RAG context.*
+
+  # Output formats
+  formats:
+    - markdown
+    - html
+
+  # Post-processing
+  post_process:
+    - fix_code_blocks
+    - add_table_of_contents
+    - validate_links

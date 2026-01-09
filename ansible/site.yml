@@ -83,6 +83,10 @@
     - role: n8n
       tags: [n8n, automation, workflows, phase12]
 
+    # Phase 13: Documentation Generator (RAG → Docs)
+    - role: docs-generator
+      tags: [docs, docs-generator, mkdocs, phase13]
+
   post_tasks:
     - name: Display completion message
       ansible.builtin.debug:
@@ -110,6 +114,10 @@
 
           Automation:
           - n8n:          http://{{ server_ip }}:{{ n8n.port }}
+
+          Documentation:
+          - Docs Site:    http://{{ server_ip }}:{{ docs_generator.port | default(8088) }}
+          - Docs API:     http://{{ server_ip }}:8089
 
           GPU Status:
             nvidia-smi

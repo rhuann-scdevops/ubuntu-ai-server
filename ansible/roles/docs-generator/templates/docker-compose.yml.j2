@@ -1,0 +1,61 @@
+# =============================================================================
+# Docs Generator Stack - Docker Compose
+# =============================================================================
+# MkDocs Material + Docs API for RAG-generated documentation
+# =============================================================================
+
+version: "3.8"
+
+services:
+  # MkDocs Material - Documentation Site
+  docs-generator:
+    image: squidfunk/mkdocs-material:latest
+    container_name: docs-generator
+    restart: unless-stopped
+    command: serve --dev-addr=0.0.0.0:8000
+    ports:
+      - "{{ docs_generator.port }}:8000"
+    volumes:
+      - {{ docs_generator.data_path }}:/docs
+    working_dir: /docs
+    networks:
+      - ai-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Docs API - Generate and publish documents
+  docs-api:
+    image: python:3.11-slim
+    container_name: docs-api
+    restart: unless-stopped
+    command: >
+      sh -c "pip install --no-cache-dir fastapi uvicorn aiofiles gitpython jinja2 httpx pydantic &&
+             python /app/docs-api.py"
+    ports:
+      - "8089:8089"
+    volumes:
+      - {{ docs_generator.data_path }}:/app
+    working_dir: /app
+    environment:
+      - DOCS_PATH=/app/docs
+      - OLLAMA_URL=http://ollama:11434
+      - QDRANT_URL=http://qdrant:6333
+      - RAG_INGESTION_URL=http://rag-ingestion:8087
+      - GIT_ENABLED={{ docs_generator.git.enabled | lower }}
+      - GIT_AUTO_COMMIT={{ docs_generator.git.auto_commit | lower }}
+    networks:
+      - ai-network
+    depends_on:
+      - docs-generator
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8089/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  ai-network:
+    external: true

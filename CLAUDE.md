@@ -56,6 +56,7 @@ security (can run independently)
 mcp-servers (requires docker-setup)
 rag-stack (requires docker-setup, ai-stack)
 n8n (requires docker-setup)
+docs-generator (requires docker-setup, rag-stack)
 ```
 
 ## Key Variables (group_vars/all.yml)
@@ -135,6 +136,8 @@ docker run --rm --gpus all nvidia/cuda:12.2-base-ubuntu22.04 nvidia-smi
 | 8087 | RAG Ingestion |
 | 5678 | n8n UI |
 | 5679 | n8n Webhooks |
+| 8088 | MkDocs Site |
+| 8089 | Docs API |
 
 ## MCP Servers for AI Autonomy
 
@@ -204,6 +207,51 @@ ansible-playbook site.yml --tags "n8n,automation"
 ```
 
 See `docs/PERSONAL-RAG-ASSISTANT.md` for detailed architecture and usage.
+
+## Documentation Generator (RAG → Docs)
+
+The server includes automated documentation generation from RAG queries:
+
+### Components
+- **MkDocs Material**: Static documentation site (port 8088)
+- **Docs API**: FastAPI service for generating/publishing Markdown (port 8089)
+- **n8n Workflows**: Automated pipelines for RAG-to-docs and GitHub publishing
+
+### Endpoints
+| Endpoint | Description |
+|----------|-------------|
+| `POST /generate` | Generate Markdown from RAG query |
+| `POST /publish` | Save and optionally git-commit document |
+| `POST /generate-and-publish` | Combined endpoint |
+| `GET /categories` | List document categories |
+| `GET /documents` | List all generated documents |
+
+### Document Categories
+| Category | Path | Purpose |
+|----------|------|---------|
+| Runbooks | `/runbooks` | Operational procedures |
+| Guides | `/guides` | Step-by-step configuration guides |
+| References | `/references` | Technical reference documentation |
+| Troubleshooting | `/troubleshooting` | Problem resolution guides |
+
+### n8n Workflows
+- **RAG to Documentation**: Webhook → RAG Search → Ollama Generate → Publish
+- **Docs to GitHub**: Webhook → List Docs → Fetch Content → GitHub Push
+
+### Storage Paths
+| Path | Purpose |
+|------|---------|
+| `/fast-pool/docker/rag/docs` | Generated documentation |
+| `/fast-pool/docker/rag/docs/site` | MkDocs rendered site |
+
+### Deployment
+```bash
+# Deploy docs-generator only
+ansible-playbook site.yml --tags "docs,docs-generator"
+
+# Full deployment with all phases
+ansible-playbook site.yml
+```
 
 ## Related Repositories
 - `proxmox-ztp`: Proxmox Zero-Touch Provisioning (reference)

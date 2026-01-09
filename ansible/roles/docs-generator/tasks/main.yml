@@ -1,0 +1,167 @@
+---
+# =============================================================================
+# Docs Generator - MkDocs Material Static Site
+# =============================================================================
+# Deploys MkDocs Material for hosting RAG-generated documentation
+# =============================================================================
+
+- name: Create docs-generator directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ docs_generator.data_path }}"
+    - "{{ docs_generator.data_path }}/site"
+    - "{{ docs_generator.data_path }}/docs"
+    - "{{ docs_generator.data_path }}/docs/runbooks"
+    - "{{ docs_generator.data_path }}/docs/guides"
+    - "{{ docs_generator.data_path }}/docs/references"
+    - "{{ docs_generator.data_path }}/docs/troubleshooting"
+    - /opt/docker-compose/docs-generator
+
+# =============================================================================
+# MkDocs Configuration
+# =============================================================================
+- name: Create MkDocs configuration
+  ansible.builtin.template:
+    src: mkdocs.yml.j2
+    dest: "{{ docs_generator.data_path }}/mkdocs.yml"
+    mode: "0644"
+
+- name: Create initial index page
+  ansible.builtin.template:
+    src: index.md.j2
+    dest: "{{ docs_generator.data_path }}/docs/index.md"
+    mode: "0644"
+    force: false  # Don't overwrite if exists
+
+- name: Create category index pages
+  ansible.builtin.template:
+    src: category-index.md.j2
+    dest: "{{ docs_generator.data_path }}/docs/{{ item.path }}/index.md"
+    mode: "0644"
+    force: false
+  loop: "{{ docs_generator.categories }}"
+
+# =============================================================================
+# Custom CSS/JS
+# =============================================================================
+- name: Create custom CSS directory
+  ansible.builtin.file:
+    path: "{{ docs_generator.data_path }}/docs/stylesheets"
+    state: directory
+    mode: "0755"
+
+- name: Create custom CSS
+  ansible.builtin.template:
+    src: custom.css.j2
+    dest: "{{ docs_generator.data_path }}/docs/stylesheets/custom.css"
+    mode: "0644"
+
+# =============================================================================
+# Docker Compose
+# =============================================================================
+- name: Create docs-generator docker-compose file
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/docker-compose/docs-generator/docker-compose.yml
+    mode: "0644"
+
+# =============================================================================
+# Deploy Container
+# =============================================================================
+- name: Deploy MkDocs container
+  community.docker.docker_container:
+    name: docs-generator
+    image: squidfunk/mkdocs-material:latest
+    state: started
+    restart_policy: unless-stopped
+    command: serve --dev-addr=0.0.0.0:8000
+    ports:
+      - "{{ docs_generator.port }}:8000"
+    volumes:
+      - "{{ docs_generator.data_path }}:/docs"
+    working_dir: /docs
+    networks:
+      - name: ai-network
+  when: docs_generator.enabled | default(true)
+
+# =============================================================================
+# Git Repository Setup (Optional)
+# =============================================================================
+- name: Initialize git repository for docs
+  ansible.builtin.command:
+    cmd: git init
+    chdir: "{{ docs_generator.data_path }}/docs"
+    creates: "{{ docs_generator.data_path }}/docs/.git"
+  when: docs_generator.git.enabled | default(false)
+
+- name: Configure git user for docs
+  ansible.builtin.command:
+    cmd: "{{ item }}"
+    chdir: "{{ docs_generator.data_path }}/docs"
+  loop:
+    - git config user.email "docs-generator@{{ server_fqdn | default('localhost') }}"
+    - git config user.name "Docs Generator"
+  when: docs_generator.git.enabled | default(false)
+  changed_when: false
+
+# =============================================================================
+# API Endpoint for Document Generation
+# =============================================================================
+- name: Create docs API service
+  ansible.builtin.template:
+    src: docs-api.py.j2
+    dest: "{{ docs_generator.data_path }}/docs-api.py"
+    mode: "0755"
+
+- name: Deploy docs-api container
+  community.docker.docker_container:
+    name: docs-api
+    image: python:3.11-slim
+    state: started
+    restart_policy: unless-stopped
+    command: >
+      sh -c "pip install fastapi uvicorn aiofiles gitpython jinja2 &&
+             python /app/docs-api.py"
+    ports:
+      - "8089:8089"
+    volumes:
+      - "{{ docs_generator.data_path }}:/app"
+    working_dir: /app
+    env:
+      DOCS_PATH: "/app/docs"
+      OLLAMA_URL: "http://ollama:11434"
+      QDRANT_URL: "http://qdrant:6333"
+    networks:
+      - name: ai-network
+  when: docs_generator.enabled | default(true)
+
+# =============================================================================
+# Verification
+# =============================================================================
+- name: Display docs-generator information
+  ansible.builtin.debug:
+    msg: |
+      ================================================
+      Docs Generator Deployed
+      ================================================
+
+      Documentation Site: http://{{ server_ip }}:{{ docs_generator.port }}
+      Docs API: http://{{ server_ip }}:8089
+
+      API Endpoints:
+        POST /generate      - Generate Markdown from RAG query
+        POST /publish       - Publish and commit document
+        GET  /categories    - List document categories
+        GET  /documents     - List all documents
+
+      Document Storage: {{ docs_generator.data_path }}/docs
+
+      Categories:
+      {% for cat in docs_generator.categories %}
+        - {{ cat.name }}: {{ cat.path }}/
+      {% endfor %}
+
+      ================================================

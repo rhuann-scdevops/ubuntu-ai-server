@@ -63,6 +63,13 @@ Ansible automation to transform Ubuntu 24.04 LTS into a production-ready AI and 
 - **Memory/Neo4j**: Persistent knowledge graph
 - **Puppeteer/Playwright**: Browser automation
 
+### RAG & Documentation
+- **Qdrant**: Vector database for semantic search
+- **Docling**: Document parsing (PDF, DOCX, Markdown)
+- **RAG Ingestion**: Custom chunking and embedding pipeline
+- **n8n**: Workflow automation for GitHub, monitoring, RAG
+- **Docs Generator**: MkDocs Material site from RAG queries
+
 ## Quick Start
 
 ### Prerequisites
@@ -133,7 +140,10 @@ ansible/
     ├── monitoring/         # Prometheus, Grafana, Loki
     ├── backup/             # Automated backup solutions
     ├── security/           # Firewall, fail2ban, hardening
-    └── mcp-servers/        # MCP Gateway and AI autonomy tools
+    ├── mcp-servers/        # MCP Gateway and AI autonomy tools
+    ├── rag-stack/          # Qdrant, Docling, RAG ingestion
+    ├── n8n/                # Workflow automation
+    └── docs-generator/     # MkDocs Material documentation site
 ```
 
 ## Available Tags
@@ -150,6 +160,9 @@ ansible/
 | `backup` | Backup configuration |
 | `security` | Security hardening |
 | `mcp` | MCP servers for AI autonomy |
+| `rag` | RAG stack (Qdrant, Docling, ingestion) |
+| `n8n` | Workflow automation |
+| `docs` | Documentation generator (MkDocs) |
 
 ## Storage Pools
 
@@ -193,6 +206,10 @@ After deployment, services are available at:
 | Prometheus | http://server:9090 | Metrics |
 | MCP Gateway | http://server:8811 | AI autonomy gateway |
 | Neo4j | http://server:7474 | Graph database for MCP memory |
+| Qdrant | http://server:6333 | Vector database |
+| n8n | http://server:5678 | Workflow automation |
+| Docs Site | http://server:8088 | Generated documentation |
+| Docs API | http://server:8089 | Documentation generator API |
 
 ## MCP Configuration
 

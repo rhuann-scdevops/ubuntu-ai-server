@@ -1,0 +1,388 @@
+#!/usr/bin/env python3
+"""
+Docs Generator API - Generate and publish Markdown documentation from RAG queries.
+
+Endpoints:
+    POST /generate      - Generate Markdown from RAG query
+    POST /publish       - Save and optionally commit document
+    GET  /categories    - List document categories
+    GET  /documents     - List all documents
+    GET  /health        - Health check
+"""
+
+import os
+import json
+import asyncio
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, List
+
+import httpx
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+import aiofiles
+from jinja2 import Template
+
+# Configuration
+DOCS_PATH = Path(os.getenv("DOCS_PATH", "/app/docs"))
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
+QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333")
+RAG_INGESTION_URL = os.getenv("RAG_INGESTION_URL", "http://rag-ingestion:8087")
+GIT_ENABLED = os.getenv("GIT_ENABLED", "false").lower() == "true"
+GIT_AUTO_COMMIT = os.getenv("GIT_AUTO_COMMIT", "false").lower() == "true"
+
+# Initialize FastAPI
+app = FastAPI(
+    title="Docs Generator API",
+    description="Generate and publish Markdown documentation from RAG queries",
+    version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# =============================================================================
+# Models
+# =============================================================================
+
+class GenerateRequest(BaseModel):
+    query: str = Field(..., description="Question or topic for documentation")
+    category: str = Field("guides", description="Document category (runbooks, guides, references, troubleshooting)")
+    title: str = Field(..., description="Document title")
+    vendors: List[str] = Field(default=[], description="Vendor filters for RAG search")
+    model: str = Field("llama3.2:8b", description="Ollama model for generation")
+    top_k: int = Field(5, description="Number of RAG chunks to retrieve")
+    template: Optional[str] = Field(None, description="Custom Jinja2 template")
+
+class PublishRequest(BaseModel):
+    filename: str = Field(..., description="Output filename (without path)")
+    category: str = Field(..., description="Category folder")
+    content: str = Field(..., description="Markdown content")
+    commit: bool = Field(False, description="Commit to git if enabled")
+    commit_message: Optional[str] = Field(None, description="Custom commit message")
+
+class GenerateResponse(BaseModel):
+    success: bool
+    content: str
+    metadata: dict
+    preview_url: str
+
+class PublishResponse(BaseModel):
+    success: bool
+    path: str
+    url: str
+    committed: bool = False
+    commit_sha: Optional[str] = None
+
+# =============================================================================
+# Templates
+# =============================================================================
+
+DEFAULT_TEMPLATE = """# {{ "{{" }} title {{ "}}" }}
+
+{% raw %}
+> **Generated**: {{ timestamp }}
+> **Source**: RAG Query
+{% if vendors %}> **Vendors**: {{ vendors | join(', ') }}{% endif %}
+
+---
+
+## Overview
+
+{{ overview }}
+
+## Details
+
+{{ content }}
+
+{% if code_examples %}
+## Code Examples
+
+{% for example in code_examples %}
+### {{ example.title }}
+
+```{{ example.language }}
+{{ example.code }}
+```
+
+{% endfor %}
+{% endif %}
+
+{% if related_topics %}
+## Related Topics
+
+{% for topic in related_topics %}
+- {{ topic }}
+{% endfor %}
+{% endif %}
+
+---
+
+!!! info "AI-Generated Content"
+    This document was automatically generated from RAG context.
+    Please review and verify before using in production.
+{% endraw %}
+"""
+
+SYSTEM_PROMPT = """You are a technical documentation writer. Generate clear, well-structured Markdown documentation based on the provided context.
+
+Guidelines:
+1. Use proper Markdown formatting (headings, lists, code blocks, tables)
+2. Include practical code examples where relevant
+3. Be concise but comprehensive
+4. Use admonitions for important notes (!!! note, !!! warning, etc.)
+5. Structure content logically with clear sections
+6. Include troubleshooting tips when relevant
+
+Output ONLY the Markdown content, no explanations."""
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+async def search_rag(query: str, top_k: int = 5, vendors: List[str] = None) -> List[dict]:
+    """Search RAG for relevant context."""
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            payload = {
+                "query": query,
+                "top_k": top_k
+            }
+            if vendors:
+                payload["filter_vendor"] = vendors[0] if len(vendors) == 1 else None
+
+            response = await client.post(
+                f"{RAG_INGESTION_URL}/search",
+                json=payload
+            )
+            response.raise_for_status()
+            return response.json().get("results", [])
+    except Exception as e:
+        print(f"RAG search error: {e}")
+        return []
+
+async def generate_with_ollama(prompt: str, context: str, model: str = "llama3.2:8b") -> str:
+    """Generate documentation using Ollama."""
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            full_prompt = f"""Context from documentation:
+---
+{context}
+---
+
+Task: {prompt}
+
+Generate comprehensive Markdown documentation based on the context above."""
+
+            response = await client.post(
+                f"{OLLAMA_URL}/api/generate",
+                json={
+                    "model": model,
+                    "prompt": full_prompt,
+                    "system": SYSTEM_PROMPT,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.3,
+                        "top_p": 0.9,
+                        "num_predict": 4096
+                    }
+                }
+            )
+            response.raise_for_status()
+            return response.json().get("response", "")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ollama generation error: {e}")
+
+async def git_commit(path: Path, message: str) -> Optional[str]:
+    """Commit changes to git repository."""
+    if not GIT_ENABLED:
+        return None
+
+    try:
+        import git
+        repo = git.Repo(DOCS_PATH)
+        repo.index.add([str(path.relative_to(DOCS_PATH))])
+        commit = repo.index.commit(message)
+        return commit.hexsha
+    except Exception as e:
+        print(f"Git commit error: {e}")
+        return None
+
+# =============================================================================
+# API Endpoints
+# =============================================================================
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {
+        "status": "healthy",
+        "docs_path": str(DOCS_PATH),
+        "git_enabled": GIT_ENABLED
+    }
+
+@app.get("/categories")
+async def list_categories():
+    """List available document categories."""
+    categories = []
+    for item in DOCS_PATH.iterdir():
+        if item.is_dir() and not item.name.startswith('.'):
+            doc_count = len(list(item.glob("*.md")))
+            categories.append({
+                "name": item.name,
+                "path": str(item.relative_to(DOCS_PATH)),
+                "document_count": doc_count
+            })
+    return {"categories": categories}
+
+@app.get("/documents")
+async def list_documents(category: Optional[str] = None):
+    """List all documents, optionally filtered by category."""
+    documents = []
+    search_path = DOCS_PATH / category if category else DOCS_PATH
+
+    for md_file in search_path.rglob("*.md"):
+        if md_file.name == "index.md":
+            continue
+        stat = md_file.stat()
+        documents.append({
+            "name": md_file.stem,
+            "filename": md_file.name,
+            "category": md_file.parent.name,
+            "path": str(md_file.relative_to(DOCS_PATH)),
+            "size": stat.st_size,
+            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+        })
+
+    return {"documents": sorted(documents, key=lambda x: x["modified"], reverse=True)}
+
+@app.post("/generate", response_model=GenerateResponse)
+async def generate_document(request: GenerateRequest):
+    """Generate Markdown documentation from RAG query."""
+
+    # Search RAG for context
+    rag_results = await search_rag(request.query, request.top_k, request.vendors)
+
+    if not rag_results:
+        # Generate without RAG context
+        context = "No specific documentation found. Generate based on general knowledge."
+    else:
+        context = "\n\n---\n\n".join([
+            f"**Source**: {r.get('metadata', {}).get('source', 'Unknown')}\n\n{r.get('text', '')}"
+            for r in rag_results
+        ])
+
+    # Generate documentation
+    prompt = f"""Generate a comprehensive {request.category.rstrip('s')} document titled "{request.title}" about:
+
+{request.query}
+
+Include:
+- Clear overview
+- Step-by-step instructions where applicable
+- Code examples with proper syntax highlighting
+- Best practices and tips
+- Troubleshooting section if relevant"""
+
+    generated_content = await generate_with_ollama(prompt, context, request.model)
+
+    # Apply template if provided
+    if request.template:
+        template = Template(request.template)
+    else:
+        template = Template(DEFAULT_TEMPLATE)
+
+    # Render final document
+    final_content = template.render(
+        title=request.title,
+        timestamp=datetime.now().isoformat(),
+        vendors=request.vendors,
+        overview=generated_content.split("\n\n")[0] if generated_content else "",
+        content=generated_content,
+        code_examples=[],
+        related_topics=[]
+    )
+
+    # Generate filename
+    filename = request.title.lower().replace(" ", "-").replace("/", "-") + ".md"
+
+    return GenerateResponse(
+        success=True,
+        content=final_content,
+        metadata={
+            "title": request.title,
+            "category": request.category,
+            "filename": filename,
+            "vendors": request.vendors,
+            "model": request.model,
+            "rag_chunks_used": len(rag_results),
+            "generated_at": datetime.now().isoformat()
+        },
+        preview_url=f"/{request.category}/{filename}"
+    )
+
+@app.post("/publish", response_model=PublishResponse)
+async def publish_document(request: PublishRequest, background_tasks: BackgroundTasks):
+    """Save and optionally commit a document."""
+
+    # Ensure category directory exists
+    category_path = DOCS_PATH / request.category
+    category_path.mkdir(parents=True, exist_ok=True)
+
+    # Write file
+    file_path = category_path / request.filename
+    async with aiofiles.open(file_path, 'w') as f:
+        await f.write(request.content)
+
+    # Commit if requested
+    commit_sha = None
+    if request.commit and GIT_ENABLED:
+        message = request.commit_message or f"[docs-gen] Add {request.filename}"
+        commit_sha = await git_commit(file_path, message)
+
+    return PublishResponse(
+        success=True,
+        path=str(file_path.relative_to(DOCS_PATH)),
+        url=f"/{request.category}/{request.filename.replace('.md', '/')}",
+        committed=commit_sha is not None,
+        commit_sha=commit_sha
+    )
+
+@app.post("/generate-and-publish")
+async def generate_and_publish(request: GenerateRequest, commit: bool = False):
+    """Generate and immediately publish a document."""
+
+    # Generate
+    gen_response = await generate_document(request)
+
+    # Publish
+    pub_request = PublishRequest(
+        filename=gen_response.metadata["filename"],
+        category=request.category,
+        content=gen_response.content,
+        commit=commit
+    )
+    pub_response = await publish_document(pub_request, BackgroundTasks())
+
+    return {
+        "generated": gen_response.dict(),
+        "published": pub_response.dict()
+    }
+
+# =============================================================================
+# Main
+# =============================================================================
+
+if __name__ == "__main__":
+    import uvicorn
+
+    # Ensure docs directory exists
+    DOCS_PATH.mkdir(parents=True, exist_ok=True)
+
+    uvicorn.run(app, host="0.0.0.0", port=8089)

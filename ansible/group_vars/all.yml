@@ -237,6 +237,9 @@ security:
       # n8n ports
       - { port: 5678, proto: "tcp", comment: "n8n UI" }
       - { port: 5679, proto: "tcp", comment: "n8n Webhooks" }
+      # Docs Generator ports
+      - { port: 8088, proto: "tcp", comment: "MkDocs Site" }
+      - { port: 8089, proto: "tcp", comment: "Docs API" }
 
   # Fail2ban
   fail2ban:
@@ -497,3 +500,60 @@ n8n:
   basic_auth_enabled: true
   basic_auth_user: "admin"
   basic_auth_password: "changeme"  # Override in vault
+
+# =============================================================================
+# Documentation Generator Configuration
+# =============================================================================
+# MkDocs Material static site for RAG-generated documentation
+# Transforms RAG outputs into publishable Markdown documentation
+# =============================================================================
+docs_generator:
+  enabled: true
+  port: 8088
+  data_path: "/fast-pool/docker/rag/docs"
+
+  # Site configuration
+  site:
+    name: "AI-Generated Documentation"
+    description: "Technical documentation generated from RAG queries"
+    author: "{{ server_hostname }}"
+    repo_url: ""  # Optional: Your GitHub docs repo
+    repo_name: ""
+
+  # Theme settings (MkDocs Material)
+  theme:
+    palette:
+      primary: "indigo"
+      accent: "indigo"
+    features:
+      - navigation.instant
+      - navigation.tracking
+      - navigation.tabs
+      - navigation.sections
+      - navigation.expand
+      - search.suggest
+      - search.highlight
+      - content.code.copy
+      - content.tabs.link
+
+  # Document categories
+  categories:
+    - name: "Runbooks"
+      path: "runbooks"
+      description: "Operational runbooks and procedures"
+    - name: "Guides"
+      path: "guides"
+      description: "Step-by-step configuration guides"
+    - name: "References"
+      path: "references"
+      description: "Technical reference documentation"
+    - name: "Troubleshooting"
+      path: "troubleshooting"
+      description: "Problem resolution guides"
+
+  # Git integration
+  git:
+    enabled: true
+    auto_commit: true
+    branch: "main"
+    commit_message_prefix: "[docs-gen]"

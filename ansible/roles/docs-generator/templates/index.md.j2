@@ -1,0 +1,80 @@
+# {{ docs_generator.site.name }}
+
+Welcome to the AI-Generated Documentation portal. This site contains technical documentation automatically generated from RAG queries against your knowledge base.
+
+## Quick Links
+
+<div class="grid cards" markdown>
+
+{% for cat in docs_generator.categories %}
+-   :material-folder-open: __{{ cat.name }}__
+
+    ---
+
+    {{ cat.description }}
+
+    [:octicons-arrow-right-24: Browse {{ cat.name }}]({{ cat.path }}/)
+
+{% endfor %}
+</div>
+
+## How It Works
+
+```mermaid
+graph LR
+    A[RAG Query] --> B[Retrieve Context]
+    B --> C[LLM Generate]
+    C --> D[Markdown Output]
+    D --> E[MkDocs Build]
+    E --> F[Published Docs]
+```
+
+1. **RAG Query**: Submit a question or topic to the RAG system
+2. **Retrieve Context**: Relevant document chunks are retrieved from Qdrant
+3. **LLM Generate**: Ollama generates structured Markdown documentation
+4. **MkDocs Build**: Documentation is rendered with Material theme
+5. **Published**: Available at this documentation site
+
+## API Endpoints
+
+Generate new documentation programmatically:
+
+```bash
+# Generate a runbook from RAG
+curl -X POST http://{{ server_ip }}:8089/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "How to configure BGP peering on Cisco routers",
+    "category": "runbooks",
+    "title": "BGP Peering Configuration",
+    "vendors": ["cisco"]
+  }'
+
+# Publish and commit the document
+curl -X POST http://{{ server_ip }}:8089/publish \
+  -H "Content-Type: application/json" \
+  -d '{
+    "filename": "bgp-peering-config.md",
+    "category": "runbooks",
+    "commit": true
+  }'
+```
+
+## Recent Documents
+
+!!! info "Auto-updated"
+    This section shows recently generated documents.
+
+<!-- Recent docs will be listed here by the API -->
+
+## Statistics
+
+| Metric | Value |
+|--------|-------|
+| Total Documents | <!-- auto-populated --> |
+| Last Updated | <!-- auto-populated --> |
+| Categories | {{ docs_generator.categories | length }} |
+
+---
+
+*Powered by [MkDocs Material](https://squidfunk.github.io/mkdocs-material/) and RAG*

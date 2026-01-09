@@ -1,0 +1,221 @@
+{
+  "name": "Docs to GitHub",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "docs-to-github",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "docs-to-github"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://docs-api:8089/documents?category={{ '{{' }} $json.body.category || '' {{ '}}' }}",
+        "options": {}
+      },
+      "id": "list-docs",
+      "name": "List Documents",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter documents based on request\nconst docs = $input.first().json.documents || [];\nconst body = $('Webhook Trigger').first().json.body;\n\n// Filter by date if specified\nlet filtered = docs;\nif (body.since) {\n  const sinceDate = new Date(body.since);\n  filtered = docs.filter(d => new Date(d.modified) > sinceDate);\n}\n\n// Filter by pattern if specified\nif (body.pattern) {\n  const regex = new RegExp(body.pattern, 'i');\n  filtered = filtered.filter(d => regex.test(d.name));\n}\n\nreturn filtered.map(doc => ({\n  ...doc,\n  repo: body.repo || '{{ mcp.github.default_docs_repo | default(\"docs\") }}',\n  branch: body.branch || 'main',\n  path_prefix: body.path_prefix || 'docs/'\n}));"
+      },
+      "id": "filter-docs",
+      "name": "Filter Documents",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "split-batches",
+      "name": "Split Into Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "url": "=http://docs-generator:8000/{{ '{{' }} $json.path {{ '}}' }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "fetch-content",
+      "name": "Fetch Document Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "operation": "edit",
+        "owner": {
+          "__rl": true,
+          "mode": "raw",
+          "value": "={{ $json.repo.split('/')[0] }}"
+        },
+        "repository": {
+          "__rl": true,
+          "mode": "raw",
+          "value": "={{ $json.repo.split('/')[1] }}"
+        },
+        "filePath": "={{ $json.path_prefix }}{{ $json.category }}/{{ $json.filename }}",
+        "fileContent": "={{ $('Fetch Document Content').first().json.data }}",
+        "commitMessage": "=docs: Update {{ $json.filename }}",
+        "additionalParameters": {
+          "branch": {
+            "branch": "={{ $json.branch }}"
+          }
+        }
+      },
+      "id": "github-push",
+      "name": "Push to GitHub",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [1250, 300],
+      "credentials": {
+        "githubApi": {
+          "id": "github-creds",
+          "name": "GitHub"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={\n  \"success\": true,\n  \"pushed\": {{ '{{' }} $json.length {{ '}}' }},\n  \"documents\": {{ '{{' }} JSON.stringify($json.map(d => d.filename)) {{ '}}' }}\n}",
+        "options": {}
+      },
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1650, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "List Documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Documents": {
+      "main": [
+        [
+          {
+            "node": "Filter Documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Documents": {
+      "main": [
+        [
+          {
+            "node": "Split Into Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Into Batches": {
+      "main": [
+        [
+          {
+            "node": "Fetch Document Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Document Content": {
+      "main": [
+        [
+          {
+            "node": "Push to GitHub",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Push to GitHub": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "docs",
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z"
+    },
+    {
+      "name": "github",
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z"
+    }
+  ]
+}

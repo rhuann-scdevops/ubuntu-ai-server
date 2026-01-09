@@ -1,0 +1,100 @@
+# {{ item.name }}
+
+{{ item.description }}
+
+## Documents
+
+!!! note "Auto-generated content"
+    Documents in this section are automatically generated from RAG queries.
+
+<!-- Document list will be populated automatically -->
+
+## Generate New Document
+
+To generate a new {{ item.name | lower }} document:
+
+=== "API"
+
+    ```bash
+    curl -X POST http://{{ server_ip }}:8089/generate \
+      -H "Content-Type: application/json" \
+      -d '{
+        "query": "Your question or topic here",
+        "category": "{{ item.path }}",
+        "title": "Document Title"
+      }'
+    ```
+
+=== "n8n Workflow"
+
+    Trigger the `rag-to-docs` workflow with:
+
+    ```json
+    {
+      "query": "Your question or topic",
+      "category": "{{ item.path }}",
+      "title": "Document Title",
+      "vendors": ["cisco", "paloalto"]
+    }
+    ```
+
+=== "OpenWebUI"
+
+    1. Open chat with RAG enabled
+    2. Use prompt: "Generate a {{ item.name | lower }} for [topic]"
+    3. Copy the Markdown output
+    4. Save to `docs/{{ item.path }}/filename.md`
+
+## Category Guidelines
+
+{% if item.path == 'runbooks' %}
+### Runbook Structure
+
+Runbooks should include:
+
+- **Purpose**: What the runbook accomplishes
+- **Prerequisites**: Required access/tools
+- **Steps**: Numbered procedure steps
+- **Verification**: How to confirm success
+- **Rollback**: How to undo changes
+- **Troubleshooting**: Common issues
+
+{% elif item.path == 'guides' %}
+### Guide Structure
+
+Guides should include:
+
+- **Introduction**: Context and goals
+- **Requirements**: Prerequisites
+- **Step-by-Step**: Detailed instructions
+- **Configuration Examples**: Code/config samples
+- **Best Practices**: Recommendations
+- **Next Steps**: Related topics
+
+{% elif item.path == 'references' %}
+### Reference Structure
+
+References should include:
+
+- **Overview**: Quick summary
+- **Syntax/Usage**: Command/API formats
+- **Parameters**: Detailed parameter descriptions
+- **Examples**: Usage examples
+- **Related**: Links to related docs
+
+{% elif item.path == 'troubleshooting' %}
+### Troubleshooting Structure
+
+Troubleshooting docs should include:
+
+- **Symptoms**: How the problem appears
+- **Causes**: Possible root causes
+- **Diagnosis**: How to identify the issue
+- **Resolution**: Step-by-step fixes
+- **Prevention**: How to avoid recurrence
+
+{% endif %}
+
+---
+
+*Last updated: {{ ansible_date_time.iso8601 | default('N/A') }}*
