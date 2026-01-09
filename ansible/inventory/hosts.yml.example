@@ -1,0 +1,23 @@
+---
+# =============================================================================
+# Ubuntu AI Server Inventory - EXAMPLE
+# =============================================================================
+# Copy this file to hosts.yml and edit with your actual values:
+#   cp hosts.yml.example hosts.yml
+# =============================================================================
+
+all:
+  children:
+    ai_servers:
+      hosts:
+        rhuan-lab-srv02:
+          ansible_host: 192.168.0.101
+
+      vars:
+        # SSH connection
+        ansible_user: rhuann
+        ansible_password: "ChangeMe!"
+        ansible_become: true
+        ansible_become_password: "ChangeMe!"
+        ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+        ansible_python_interpreter: /usr/bin/python3

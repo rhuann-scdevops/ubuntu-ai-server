@@ -1,0 +1,156 @@
+---
+# =============================================================================
+# NVIDIA Driver and CUDA Installation
+# =============================================================================
+# Installs NVIDIA drivers and CUDA toolkit for AI/ML workloads
+# Target: NVIDIA Quadro P4000 (Pascal architecture, compute capability 6.1)
+# =============================================================================
+
+- name: Check if NVIDIA driver is installed
+  ansible.builtin.command: nvidia-smi
+  register: nvidia_check
+  changed_when: false
+  failed_when: false
+
+- name: Remove nouveau driver (if present)
+  when: nvidia_check.rc != 0
+  block:
+    - name: Blacklist nouveau driver
+      ansible.builtin.copy:
+        dest: /etc/modprobe.d/blacklist-nouveau.conf
+        content: |
+          blacklist nouveau
+          options nouveau modeset=0
+        mode: "0644"
+      notify: update initramfs
+
+    - name: Update initramfs
+      ansible.builtin.command: update-initramfs -u
+      changed_when: true
+
+# =============================================================================
+# NVIDIA Driver Installation
+# =============================================================================
+- name: Add NVIDIA graphics drivers PPA
+  ansible.builtin.apt_repository:
+    repo: ppa:graphics-drivers/ppa
+    state: present
+    update_cache: true
+  when: nvidia_check.rc != 0
+
+- name: Install NVIDIA driver
+  ansible.builtin.apt:
+    name:
+      - "nvidia-driver-{{ nvidia.driver_version }}"
+      - nvidia-utils-{{ nvidia.driver_version }}
+    state: present
+  when: nvidia_check.rc != 0
+  notify: reboot for nvidia
+
+# =============================================================================
+# CUDA Toolkit Installation
+# =============================================================================
+- name: Check if CUDA is installed
+  ansible.builtin.stat:
+    path: /usr/local/cuda
+  register: cuda_check
+
+- name: Add NVIDIA CUDA repository key
+  ansible.builtin.apt_key:
+    url: https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/3bf863cc.pub
+    state: present
+  when: not cuda_check.stat.exists
+
+- name: Add NVIDIA CUDA repository
+  ansible.builtin.apt_repository:
+    repo: "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/ /"
+    state: present
+    filename: cuda
+    update_cache: true
+  when: not cuda_check.stat.exists
+
+- name: Install CUDA toolkit
+  ansible.builtin.apt:
+    name:
+      - cuda-toolkit-{{ nvidia.cuda_version | replace('.', '-') }}
+    state: present
+  when: not cuda_check.stat.exists
+
+# =============================================================================
+# cuDNN Installation
+# =============================================================================
+- name: Install cuDNN
+  ansible.builtin.apt:
+    name:
+      - libcudnn{{ nvidia.cudnn_version }}-cuda-{{ nvidia.cuda_version.split('.')[0] }}
+    state: present
+  when: not cuda_check.stat.exists
+  failed_when: false  # May not be available for all CUDA versions
+
+# =============================================================================
+# Environment Configuration
+# =============================================================================
+- name: Configure CUDA environment
+  ansible.builtin.copy:
+    dest: /etc/profile.d/cuda.sh
+    content: |
+      # CUDA Environment Variables
+      export PATH=/usr/local/cuda/bin:$PATH
+      export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+      export CUDA_HOME=/usr/local/cuda
+    mode: "0644"
+
+- name: Add CUDA libraries to ldconfig
+  ansible.builtin.copy:
+    dest: /etc/ld.so.conf.d/cuda.conf
+    content: |
+      /usr/local/cuda/lib64
+    mode: "0644"
+  notify: update ldconfig
+
+# =============================================================================
+# Persistence Mode and Power Settings
+# =============================================================================
+- name: Enable NVIDIA persistence mode
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/nvidia-persistenced.service
+    content: |
+      [Unit]
+      Description=NVIDIA Persistence Daemon
+      Wants=syslog.target
+
+      [Service]
+      Type=forking
+      ExecStart=/usr/bin/nvidia-persistenced --user root
+      ExecStopPost=/bin/rm -rf /var/run/nvidia-persistenced
+
+      [Install]
+      WantedBy=multi-user.target
+    mode: "0644"
+  notify: enable nvidia persistence
+  when: nvidia_check.rc == 0 or nvidia.driver_version is defined
+
+# =============================================================================
+# Verification
+# =============================================================================
+- name: Verify NVIDIA installation
+  ansible.builtin.command: nvidia-smi
+  register: nvidia_smi_output
+  changed_when: false
+  failed_when: false
+
+- name: Display NVIDIA GPU information
+  ansible.builtin.debug:
+    msg: "{{ nvidia_smi_output.stdout_lines }}"
+  when: nvidia_smi_output.rc == 0
+
+- name: Verify CUDA installation
+  ansible.builtin.command: nvcc --version
+  register: nvcc_output
+  changed_when: false
+  failed_when: false
+
+- name: Display CUDA version
+  ansible.builtin.debug:
+    msg: "{{ nvcc_output.stdout_lines }}"
+  when: nvcc_output.rc == 0

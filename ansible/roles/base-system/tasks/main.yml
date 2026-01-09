@@ -1,0 +1,108 @@
+---
+# =============================================================================
+# Base System Configuration
+# =============================================================================
+
+- name: Set hostname
+  ansible.builtin.hostname:
+    name: "{{ server_hostname }}"
+
+- name: Update /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1'
+    line: "127.0.1.1 {{ server_fqdn }} {{ server_hostname }}"
+    state: present
+
+- name: Set timezone
+  community.general.timezone:
+    name: "{{ server_timezone }}"
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Upgrade all packages
+  ansible.builtin.apt:
+    upgrade: dist
+    autoremove: true
+    autoclean: true
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name: "{{ base_packages }}"
+    state: present
+
+- name: Install ZFS utilities
+  ansible.builtin.apt:
+    name:
+      - zfsutils-linux
+      - zfs-auto-snapshot
+    state: present
+
+- name: Configure sysctl for performance
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/99-ai-server.conf
+    reload: true
+  loop:
+    # VM settings for better memory management
+    - { name: "vm.swappiness", value: "10" }
+    - { name: "vm.dirty_ratio", value: "60" }
+    - { name: "vm.dirty_background_ratio", value: "2" }
+    # Network performance
+    - { name: "net.core.rmem_max", value: "16777216" }
+    - { name: "net.core.wmem_max", value: "16777216" }
+    - { name: "net.ipv4.tcp_rmem", value: "4096 87380 16777216" }
+    - { name: "net.ipv4.tcp_wmem", value: "4096 65536 16777216" }
+    # File handles for containers
+    - { name: "fs.file-max", value: "2097152" }
+    - { name: "fs.inotify.max_user_watches", value: "524288" }
+    - { name: "fs.inotify.max_user_instances", value: "512" }
+
+- name: Configure limits for containers
+  ansible.builtin.copy:
+    dest: /etc/security/limits.d/99-ai-server.conf
+    content: |
+      # Limits for AI server workloads
+      * soft nofile 1048576
+      * hard nofile 1048576
+      * soft nproc 65535
+      * hard nproc 65535
+      root soft nofile 1048576
+      root hard nofile 1048576
+    mode: "0644"
+
+- name: Enable and start chrony for time sync
+  ansible.builtin.apt:
+    name: chrony
+    state: present
+
+- name: Ensure chrony is running
+  ansible.builtin.systemd:
+    name: chrony
+    state: started
+    enabled: true
+
+- name: Create project directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /opt/scripts
+    - /opt/docker-compose
+    - /opt/backups
+
+- name: Reboot if required
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: reboot_required
+
+- name: Notify about reboot
+  ansible.builtin.debug:
+    msg: "Reboot required after base system setup"
+  when: reboot_required.stat.exists
+  notify: reboot server

@@ -1,0 +1,213 @@
+---
+# =============================================================================
+# Backup Configuration
+# =============================================================================
+# Configures ZFS snapshots and optional remote backups
+# =============================================================================
+
+# =============================================================================
+# ZFS Automated Snapshots
+# =============================================================================
+- name: Install zfs-auto-snapshot
+  ansible.builtin.apt:
+    name: zfs-auto-snapshot
+    state: present
+  when: backup.zfs_snapshots.enabled
+
+- name: Enable ZFS auto-snapshot for fast-pool
+  ansible.builtin.command: zfs set com.sun:auto-snapshot=true {{ zfs_fast_pool.name }}
+  changed_when: false
+  when: backup.zfs_snapshots.enabled
+
+- name: Enable ZFS auto-snapshot for bulk-pool
+  ansible.builtin.command: zfs set com.sun:auto-snapshot=true {{ zfs_bulk_pool.name }}
+  changed_when: false
+  when: backup.zfs_snapshots.enabled
+
+# =============================================================================
+# Custom Snapshot Script
+# =============================================================================
+- name: Create ZFS snapshot script
+  ansible.builtin.copy:
+    dest: /opt/scripts/zfs-snapshot.sh
+    content: |
+      #!/bin/bash
+      # =============================================================================
+      # ZFS Snapshot Script
+      # =============================================================================
+
+      DATE=$(date +%Y%m%d-%H%M%S)
+      RETENTION_DAYS={{ backup.zfs_snapshots.retention_days }}
+
+      # Create snapshots
+      echo "Creating snapshots..."
+      zfs snapshot -r {{ zfs_fast_pool.name }}@manual-$DATE
+      zfs snapshot -r {{ zfs_bulk_pool.name }}@manual-$DATE
+
+      # Clean old manual snapshots
+      echo "Cleaning snapshots older than $RETENTION_DAYS days..."
+
+      # Find and destroy old snapshots
+      zfs list -H -t snapshot -o name -S creation | while read snapshot; do
+        if [[ $snapshot == *"@manual-"* ]]; then
+          created=$(zfs get -H -p -o value creation "$snapshot")
+          now=$(date +%s)
+          age=$(( (now - created) / 86400 ))
+
+          if [ $age -gt $RETENTION_DAYS ]; then
+            echo "Destroying old snapshot: $snapshot (${age} days old)"
+            zfs destroy "$snapshot"
+          fi
+        fi
+      done
+
+      echo "Snapshot complete!"
+      zfs list -t snapshot | grep "manual-$DATE"
+    mode: "0755"
+  when: backup.zfs_snapshots.enabled
+
+- name: Create ZFS snapshot cron job
+  ansible.builtin.cron:
+    name: "ZFS daily snapshot"
+    minute: "0"
+    hour: "2"
+    job: "/opt/scripts/zfs-snapshot.sh >> /var/log/zfs-snapshot.log 2>&1"
+    user: root
+  when: backup.zfs_snapshots.enabled
+
+# =============================================================================
+# Docker Volume Backup Script
+# =============================================================================
+- name: Create Docker volume backup script
+  ansible.builtin.copy:
+    dest: /opt/scripts/backup-docker-volumes.sh
+    content: |
+      #!/bin/bash
+      # =============================================================================
+      # Docker Volume Backup Script
+      # =============================================================================
+
+      BACKUP_DIR="/bulk-pool/backups/docker-volumes"
+      DATE=$(date +%Y%m%d)
+
+      mkdir -p $BACKUP_DIR
+
+      echo "Backing up Docker volumes to $BACKUP_DIR..."
+
+      # Backup each volume
+      for volume in $(docker volume ls -q); do
+        echo "Backing up volume: $volume"
+        docker run --rm \
+          -v $volume:/source:ro \
+          -v $BACKUP_DIR:/backup \
+          alpine tar czf /backup/${volume}_${DATE}.tar.gz -C /source .
+      done
+
+      # Clean old backups (keep last 7 days)
+      find $BACKUP_DIR -name "*.tar.gz" -mtime +7 -delete
+
+      echo "Docker volume backup complete!"
+      ls -lh $BACKUP_DIR
+    mode: "0755"
+
+- name: Create Docker volume backup cron job
+  ansible.builtin.cron:
+    name: "Docker volume backup"
+    minute: "30"
+    hour: "3"
+    job: "/opt/scripts/backup-docker-volumes.sh >> /var/log/docker-backup.log 2>&1"
+    user: root
+
+# =============================================================================
+# Database Backup Script (for PostgreSQL containers)
+# =============================================================================
+- name: Create PostgreSQL backup script
+  ansible.builtin.copy:
+    dest: /opt/scripts/backup-postgres.sh
+    content: |
+      #!/bin/bash
+      # =============================================================================
+      # PostgreSQL Container Backup Script
+      # =============================================================================
+
+      BACKUP_DIR="/bulk-pool/backups/postgres"
+      DATE=$(date +%Y%m%d-%H%M%S)
+
+      mkdir -p $BACKUP_DIR
+
+      # Find all running PostgreSQL containers
+      for container in $(docker ps --filter "ancestor=postgres" --format "{% raw %}{{.Names}}{% endraw %}"); do
+        echo "Backing up PostgreSQL in container: $container"
+        docker exec $container pg_dumpall -U postgres > $BACKUP_DIR/${container}_${DATE}.sql
+        gzip $BACKUP_DIR/${container}_${DATE}.sql
+      done
+
+      # Clean old backups
+      find $BACKUP_DIR -name "*.sql.gz" -mtime +7 -delete
+
+      echo "PostgreSQL backup complete!"
+    mode: "0755"
+
+# =============================================================================
+# Remote Backup (Optional)
+# =============================================================================
+- name: Create remote backup script
+  ansible.builtin.copy:
+    dest: /opt/scripts/remote-backup.sh
+    content: |
+      #!/bin/bash
+      # =============================================================================
+      # Remote Backup Script (ZFS Send)
+      # =============================================================================
+
+      REMOTE_HOST="{{ backup.remote.target }}"
+      DATE=$(date +%Y%m%d)
+
+      if [ -z "$REMOTE_HOST" ]; then
+        echo "Remote backup target not configured"
+        exit 1
+      fi
+
+      echo "Starting remote backup to $REMOTE_HOST..."
+
+      # Create snapshot for backup
+      zfs snapshot {{ zfs_fast_pool.name }}@remote-$DATE
+      zfs snapshot {{ zfs_bulk_pool.name }}@remote-$DATE
+
+      # Send to remote (incremental if possible)
+      # Note: Configure SSH keys for passwordless access
+      # zfs send -R {{ zfs_fast_pool.name }}@remote-$DATE | ssh $REMOTE_HOST zfs recv backup-pool/fast
+      # zfs send -R {{ zfs_bulk_pool.name }}@remote-$DATE | ssh $REMOTE_HOST zfs recv backup-pool/bulk
+
+      echo "Remote backup complete!"
+    mode: "0755"
+  when: backup.remote.enabled
+
+- name: Create remote backup cron job
+  ansible.builtin.cron:
+    name: "ZFS remote backup"
+    minute: "0"
+    hour: "4"
+    weekday: "0"
+    job: "/opt/scripts/remote-backup.sh >> /var/log/remote-backup.log 2>&1"
+    user: root
+  when: backup.remote.enabled
+
+# =============================================================================
+# Verification
+# =============================================================================
+- name: List backup scripts
+  ansible.builtin.command: ls -la /opt/scripts/
+  register: backup_scripts
+  changed_when: false
+
+- name: Display backup configuration
+  ansible.builtin.debug:
+    msg: |
+      Backup Configuration:
+      - ZFS Snapshots: {{ 'Enabled' if backup.zfs_snapshots.enabled else 'Disabled' }}
+      - Retention: {{ backup.zfs_snapshots.retention_days }} days
+      - Schedule: {{ backup.zfs_snapshots.schedule }}
+
+      Scripts installed:
+      {{ backup_scripts.stdout }}

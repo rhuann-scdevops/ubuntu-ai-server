@@ -1,0 +1,208 @@
+---
+# =============================================================================
+# Monitoring Stack Deployment
+# =============================================================================
+# Deploys: Prometheus, Grafana, Node Exporter, DCGM Exporter, Loki
+# =============================================================================
+
+- name: Create monitoring stack directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ monitoring.prometheus.data_path }}"
+    - "{{ monitoring.prometheus.data_path }}/config"
+    - "{{ monitoring.grafana.data_path }}"
+    - "{{ monitoring.grafana.data_path }}/provisioning/datasources"
+    - "{{ monitoring.grafana.data_path }}/provisioning/dashboards"
+    - "{{ monitoring.loki.data_path }}"
+    - /opt/docker-compose/monitoring-stack
+
+# =============================================================================
+# Node Exporter - System Metrics
+# =============================================================================
+- name: Deploy Node Exporter container
+  community.docker.docker_container:
+    name: node-exporter
+    image: prom/node-exporter:latest
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ monitoring.node_exporter.port }}:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - name: ai-network
+  when: monitoring.node_exporter.enabled
+
+# =============================================================================
+# NVIDIA DCGM Exporter - GPU Metrics
+# =============================================================================
+- name: Deploy DCGM Exporter container
+  community.docker.docker_container:
+    name: dcgm-exporter
+    image: nvidia/dcgm-exporter:latest
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ monitoring.dcgm_exporter.port }}:9400"
+    devices:
+      - /dev/nvidia0:/dev/nvidia0
+      - /dev/nvidiactl:/dev/nvidiactl
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+    env:
+      NVIDIA_VISIBLE_DEVICES: all
+    runtime: nvidia
+    networks:
+      - name: ai-network
+  when: monitoring.dcgm_exporter.enabled
+
+# =============================================================================
+# Prometheus - Metrics Collection
+# =============================================================================
+- name: Create Prometheus configuration
+  ansible.builtin.template:
+    src: prometheus.yml.j2
+    dest: "{{ monitoring.prometheus.data_path }}/config/prometheus.yml"
+    mode: "0644"
+  when: monitoring.prometheus.enabled
+
+- name: Deploy Prometheus container
+  community.docker.docker_container:
+    name: prometheus
+    image: prom/prometheus:latest
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ monitoring.prometheus.port }}:9090"
+    volumes:
+      - "{{ monitoring.prometheus.data_path }}/config/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
+      - "{{ monitoring.prometheus.data_path }}:/prometheus"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time={{ monitoring.prometheus.retention }}'
+      - '--web.enable-lifecycle'
+    networks:
+      - name: ai-network
+  when: monitoring.prometheus.enabled
+
+# =============================================================================
+# Loki - Log Aggregation
+# =============================================================================
+- name: Create Loki configuration
+  ansible.builtin.template:
+    src: loki-config.yml.j2
+    dest: "{{ monitoring.loki.data_path }}/loki-config.yml"
+    mode: "0644"
+  when: monitoring.loki.enabled
+
+- name: Deploy Loki container
+  community.docker.docker_container:
+    name: loki
+    image: grafana/loki:latest
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ monitoring.loki.port }}:3100"
+    volumes:
+      - "{{ monitoring.loki.data_path }}:/loki"
+      - "{{ monitoring.loki.data_path }}/loki-config.yml:/etc/loki/local-config.yaml:ro"
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - name: ai-network
+  when: monitoring.loki.enabled
+
+# =============================================================================
+# Promtail - Log Shipping (to Loki)
+# =============================================================================
+- name: Create Promtail configuration
+  ansible.builtin.template:
+    src: promtail-config.yml.j2
+    dest: "{{ monitoring.loki.data_path }}/promtail-config.yml"
+    mode: "0644"
+  when: monitoring.loki.enabled
+
+- name: Deploy Promtail container
+  community.docker.docker_container:
+    name: promtail
+    image: grafana/promtail:latest
+    state: started
+    restart_policy: unless-stopped
+    volumes:
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - "{{ monitoring.loki.data_path }}/promtail-config.yml:/etc/promtail/config.yml:ro"
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - name: ai-network
+  when: monitoring.loki.enabled
+
+# =============================================================================
+# Grafana - Visualization
+# =============================================================================
+- name: Create Grafana datasources provisioning
+  ansible.builtin.template:
+    src: grafana-datasources.yml.j2
+    dest: "{{ monitoring.grafana.data_path }}/provisioning/datasources/datasources.yml"
+    mode: "0644"
+  when: monitoring.grafana.enabled
+
+- name: Deploy Grafana container
+  community.docker.docker_container:
+    name: grafana
+    image: grafana/grafana:latest
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ monitoring.grafana.port }}:3000"
+    volumes:
+      - "{{ monitoring.grafana.data_path }}:/var/lib/grafana"
+      - "{{ monitoring.grafana.data_path }}/provisioning:/etc/grafana/provisioning"
+    env:
+      GF_SECURITY_ADMIN_PASSWORD: "{{ monitoring.grafana.admin_password }}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: "http://{{ server_ip }}:{{ monitoring.grafana.port }}"
+    networks:
+      - name: ai-network
+  when: monitoring.grafana.enabled
+
+# =============================================================================
+# Docker Compose Reference
+# =============================================================================
+- name: Create Monitoring stack docker-compose file
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/docker-compose/monitoring-stack/docker-compose.yml
+    mode: "0644"
+
+# =============================================================================
+# Verification
+# =============================================================================
+- name: Wait for Grafana to be ready
+  ansible.builtin.uri:
+    url: "http://localhost:{{ monitoring.grafana.port }}/api/health"
+    method: GET
+  register: grafana_ready
+  until: grafana_ready.status == 200
+  retries: 30
+  delay: 5
+  when: monitoring.grafana.enabled
+
+- name: Display monitoring services status
+  ansible.builtin.debug:
+    msg: |
+      Monitoring Stack Deployed:
+      - Prometheus: http://{{ server_ip }}:{{ monitoring.prometheus.port }}
+      - Grafana: http://{{ server_ip }}:{{ monitoring.grafana.port }} (admin/{{ monitoring.grafana.admin_password }})
+      - Node Exporter: http://{{ server_ip }}:{{ monitoring.node_exporter.port }}/metrics
+      - GPU Metrics: http://{{ server_ip }}:{{ monitoring.dcgm_exporter.port }}/metrics
+      - Loki: http://{{ server_ip }}:{{ monitoring.loki.port }}

@@ -1,0 +1,180 @@
+---
+# =============================================================================
+# AI Stack Deployment
+# =============================================================================
+# Deploys AI tools: Ollama, Open WebUI, ComfyUI, LocalAI
+# All services run with GPU access
+# =============================================================================
+
+- name: Create AI stack directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ ai_stack.ollama.models_path }}"
+    - "{{ ai_stack.open_webui.data_path }}"
+    - "{{ ai_stack.comfyui.models_path }}"
+    - /opt/docker-compose/ai-stack
+
+# =============================================================================
+# Ollama - Local LLM Inference
+# =============================================================================
+- name: Deploy Ollama container
+  community.docker.docker_container:
+    name: ollama
+    image: ollama/ollama:latest
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ ai_stack.ollama.port }}:11434"
+    volumes:
+      - "{{ ai_stack.ollama.models_path }}:/root/.ollama"
+    devices:
+      - /dev/nvidia0:/dev/nvidia0
+      - /dev/nvidiactl:/dev/nvidiactl
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+    env:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    runtime: nvidia
+    networks:
+      - name: ai-network
+  when: ai_stack.ollama.enabled
+
+- name: Wait for Ollama to be ready
+  ansible.builtin.uri:
+    url: "http://localhost:{{ ai_stack.ollama.port }}/api/tags"
+    method: GET
+  register: ollama_ready
+  until: ollama_ready.status == 200
+  retries: 30
+  delay: 5
+  when: ai_stack.ollama.enabled
+
+- name: Pull default Ollama models
+  ansible.builtin.command: >
+    docker exec ollama ollama pull {{ item }}
+  loop: "{{ ai_stack.ollama.default_models }}"
+  register: model_pull
+  changed_when: "'pulling' in model_pull.stdout"
+  when: ai_stack.ollama.enabled
+
+# =============================================================================
+# Open WebUI - Chat Interface
+# =============================================================================
+- name: Deploy Open WebUI container
+  community.docker.docker_container:
+    name: open-webui
+    image: ghcr.io/open-webui/open-webui:main
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ ai_stack.open_webui.port }}:8080"
+    volumes:
+      - "{{ ai_stack.open_webui.data_path }}:/app/backend/data"
+    env:
+      OLLAMA_BASE_URL: "http://ollama:11434"
+      WEBUI_AUTH: "False"
+    networks:
+      - name: ai-network
+  when: ai_stack.open_webui.enabled
+
+# =============================================================================
+# ComfyUI - Stable Diffusion Workflow
+# =============================================================================
+- name: Create ComfyUI directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ ai_stack.comfyui.models_path }}/checkpoints"
+    - "{{ ai_stack.comfyui.models_path }}/loras"
+    - "{{ ai_stack.comfyui.models_path }}/vae"
+    - "{{ ai_stack.comfyui.models_path }}/controlnet"
+    - /opt/docker-compose/ai-stack/comfyui/output
+    - /opt/docker-compose/ai-stack/comfyui/input
+  when: ai_stack.comfyui.enabled
+
+- name: Deploy ComfyUI container
+  community.docker.docker_container:
+    name: comfyui
+    image: yanwk/comfyui-boot:latest
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ ai_stack.comfyui.port }}:8188"
+    volumes:
+      - "{{ ai_stack.comfyui.models_path }}:/home/runner/ComfyUI/models"
+      - /opt/docker-compose/ai-stack/comfyui/output:/home/runner/ComfyUI/output
+      - /opt/docker-compose/ai-stack/comfyui/input:/home/runner/ComfyUI/input
+    devices:
+      - /dev/nvidia0:/dev/nvidia0
+      - /dev/nvidiactl:/dev/nvidiactl
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+    env:
+      NVIDIA_VISIBLE_DEVICES: all
+      CLI_ARGS: "--listen 0.0.0.0"
+    runtime: nvidia
+    networks:
+      - name: ai-network
+  when: ai_stack.comfyui.enabled
+
+# =============================================================================
+# LocalAI - OpenAI Compatible API (Optional)
+# =============================================================================
+- name: Create LocalAI directories
+  ansible.builtin.file:
+    path: "{{ ai_stack.localai.models_path }}"
+    state: directory
+    mode: "0755"
+  when: ai_stack.localai.enabled
+
+- name: Deploy LocalAI container
+  community.docker.docker_container:
+    name: localai
+    image: localai/localai:latest-gpu-nvidia-cuda-12
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ ai_stack.localai.port }}:8080"
+    volumes:
+      - "{{ ai_stack.localai.models_path }}:/models"
+    devices:
+      - /dev/nvidia0:/dev/nvidia0
+      - /dev/nvidiactl:/dev/nvidiactl
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+    env:
+      NVIDIA_VISIBLE_DEVICES: all
+      MODELS_PATH: /models
+    runtime: nvidia
+    networks:
+      - name: ai-network
+  when: ai_stack.localai.enabled
+
+# =============================================================================
+# Docker Compose File for Reference
+# =============================================================================
+- name: Create AI stack docker-compose file
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/docker-compose/ai-stack/docker-compose.yml
+    mode: "0644"
+
+# =============================================================================
+# Verification
+# =============================================================================
+- name: Verify Ollama is running
+  ansible.builtin.uri:
+    url: "http://localhost:{{ ai_stack.ollama.port }}/api/tags"
+    method: GET
+  register: ollama_verify
+  when: ai_stack.ollama.enabled
+
+- name: Display available Ollama models
+  ansible.builtin.debug:
+    msg: "Ollama models: {{ ollama_verify.json.models | map(attribute='name') | list }}"
+  when:
+    - ai_stack.ollama.enabled
+    - ollama_verify.json.models is defined

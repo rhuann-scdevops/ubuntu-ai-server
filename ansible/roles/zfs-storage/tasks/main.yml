@@ -1,0 +1,141 @@
+---
+# =============================================================================
+# ZFS Storage Configuration
+# =============================================================================
+# Creates two ZFS pools:
+# - fast-pool: Mirror of 2x SSDs for containers, databases, AI models
+# - bulk-pool: Mirror of 2x HDDs for datasets, backups, media
+# =============================================================================
+
+- name: Ensure ZFS is installed
+  ansible.builtin.apt:
+    name:
+      - zfsutils-linux
+      - zfs-auto-snapshot
+    state: present
+
+- name: Load ZFS kernel module
+  community.general.modprobe:
+    name: zfs
+    state: present
+
+# =============================================================================
+# Fast Pool (SSDs)
+# =============================================================================
+- name: Check if fast-pool exists
+  ansible.builtin.command: zpool list {{ zfs_fast_pool.name }}
+  register: fast_pool_check
+  changed_when: false
+  failed_when: false
+
+- name: Wipe SSD disks for fast-pool
+  ansible.builtin.command: wipefs -a {{ item }}
+  loop: "{{ zfs_fast_pool.disks }}"
+  when: fast_pool_check.rc != 0
+
+- name: Create fast-pool (SSD mirror)
+  ansible.builtin.command: >
+    zpool create -f
+    -o ashift=12
+    -O compression={{ zfs_fast_pool.options.compression }}
+    -O atime={{ zfs_fast_pool.options.atime }}
+    -O xattr={{ zfs_fast_pool.options.xattr }}
+    -O acltype={{ zfs_fast_pool.options.acltype }}
+    {{ zfs_fast_pool.name }}
+    {{ zfs_fast_pool.type }}
+    {{ zfs_fast_pool.disks | join(' ') }}
+  when: fast_pool_check.rc != 0
+
+- name: Create fast-pool datasets
+  ansible.builtin.command: >
+    zfs create
+    {% if item.quota is defined %}-o quota={{ item.quota }}{% endif %}
+    {% if item.recordsize is defined %}-o recordsize={{ item.recordsize }}{% endif %}
+    -o mountpoint={{ item.mountpoint }}
+    {{ zfs_fast_pool.name }}/{{ item.name }}
+  loop: "{{ zfs_fast_pool.datasets }}"
+  register: fast_dataset_result
+  changed_when: fast_dataset_result.rc == 0
+  failed_when: fast_dataset_result.rc != 0 and 'dataset already exists' not in fast_dataset_result.stderr
+
+# =============================================================================
+# Bulk Pool (HDDs)
+# =============================================================================
+- name: Check if bulk-pool exists
+  ansible.builtin.command: zpool list {{ zfs_bulk_pool.name }}
+  register: bulk_pool_check
+  changed_when: false
+  failed_when: false
+
+- name: Wipe HDD disks for bulk-pool
+  ansible.builtin.command: wipefs -a {{ item }}
+  loop: "{{ zfs_bulk_pool.disks }}"
+  when: bulk_pool_check.rc != 0
+
+- name: Create bulk-pool (HDD mirror)
+  ansible.builtin.command: >
+    zpool create -f
+    -o ashift=12
+    -O compression={{ zfs_bulk_pool.options.compression }}
+    -O atime={{ zfs_bulk_pool.options.atime }}
+    {{ zfs_bulk_pool.name }}
+    {{ zfs_bulk_pool.type }}
+    {{ zfs_bulk_pool.disks | join(' ') }}
+  when: bulk_pool_check.rc != 0
+
+- name: Create bulk-pool datasets
+  ansible.builtin.command: >
+    zfs create
+    {% if item.quota is defined %}-o quota={{ item.quota }}{% endif %}
+    -o mountpoint={{ item.mountpoint }}
+    {{ zfs_bulk_pool.name }}/{{ item.name }}
+  loop: "{{ zfs_bulk_pool.datasets }}"
+  register: bulk_dataset_result
+  changed_when: bulk_dataset_result.rc == 0
+  failed_when: bulk_dataset_result.rc != 0 and 'dataset already exists' not in bulk_dataset_result.stderr
+
+# =============================================================================
+# ZFS Auto-Snapshot Configuration
+# =============================================================================
+- name: Configure ZFS auto-snapshot for fast-pool
+  ansible.builtin.command: >
+    zfs set com.sun:auto-snapshot=true {{ zfs_fast_pool.name }}
+  changed_when: false
+
+- name: Configure ZFS auto-snapshot for bulk-pool
+  ansible.builtin.command: >
+    zfs set com.sun:auto-snapshot=true {{ zfs_bulk_pool.name }}
+  changed_when: false
+
+# =============================================================================
+# ZFS Scrub Schedule
+# =============================================================================
+- name: Create ZFS scrub cron job
+  ansible.builtin.cron:
+    name: "ZFS weekly scrub"
+    weekday: "0"
+    hour: "2"
+    minute: "0"
+    job: "/usr/sbin/zpool scrub {{ zfs_fast_pool.name }} && /usr/sbin/zpool scrub {{ zfs_bulk_pool.name }}"
+    user: root
+
+# =============================================================================
+# Verify Configuration
+# =============================================================================
+- name: Display ZFS pool status
+  ansible.builtin.command: zpool status
+  register: zpool_status
+  changed_when: false
+
+- name: Show ZFS pool status
+  ansible.builtin.debug:
+    msg: "{{ zpool_status.stdout_lines }}"
+
+- name: Display ZFS datasets
+  ansible.builtin.command: zfs list
+  register: zfs_list
+  changed_when: false
+
+- name: Show ZFS datasets
+  ansible.builtin.debug:
+    msg: "{{ zfs_list.stdout_lines }}"

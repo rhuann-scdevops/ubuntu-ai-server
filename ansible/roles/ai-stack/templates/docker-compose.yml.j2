@@ -1,0 +1,99 @@
+# =============================================================================
+# AI Stack - Docker Compose
+# =============================================================================
+# Reference file for manual deployment
+# Containers are managed by Ansible, use this for debugging/testing
+# =============================================================================
+
+version: "3.8"
+
+services:
+{% if ai_stack.ollama.enabled %}
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "{{ ai_stack.ollama.port }}:11434"
+    volumes:
+      - {{ ai_stack.ollama.models_path }}:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - ai-network
+{% endif %}
+
+{% if ai_stack.open_webui.enabled %}
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    ports:
+      - "{{ ai_stack.open_webui.port }}:8080"
+    volumes:
+      - {{ ai_stack.open_webui.data_path }}:/app/backend/data
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_AUTH=False
+    depends_on:
+      - ollama
+    networks:
+      - ai-network
+{% endif %}
+
+{% if ai_stack.comfyui.enabled %}
+  comfyui:
+    image: yanwk/comfyui-boot:latest
+    container_name: comfyui
+    restart: unless-stopped
+    ports:
+      - "{{ ai_stack.comfyui.port }}:8188"
+    volumes:
+      - {{ ai_stack.comfyui.models_path }}:/home/runner/ComfyUI/models
+      - /opt/docker-compose/ai-stack/comfyui/output:/home/runner/ComfyUI/output
+      - /opt/docker-compose/ai-stack/comfyui/input:/home/runner/ComfyUI/input
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CLI_ARGS=--listen 0.0.0.0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - ai-network
+{% endif %}
+
+{% if ai_stack.localai.enabled %}
+  localai:
+    image: localai/localai:latest-gpu-nvidia-cuda-12
+    container_name: localai
+    restart: unless-stopped
+    ports:
+      - "{{ ai_stack.localai.port }}:8080"
+    volumes:
+      - {{ ai_stack.localai.models_path }}:/models
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - MODELS_PATH=/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - ai-network
+{% endif %}
+
+networks:
+  ai-network:
+    external: true

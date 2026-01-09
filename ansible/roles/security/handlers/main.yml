@@ -1,0 +1,14 @@
+---
+# =============================================================================
+# Security Handlers
+# =============================================================================
+
+- name: restart fail2ban
+  ansible.builtin.systemd:
+    name: fail2ban
+    state: restarted
+
+- name: restart sshd
+  ansible.builtin.systemd:
+    name: sshd
+    state: restarted

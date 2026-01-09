@@ -1,0 +1,23 @@
+{
+  "data-root": "{{ docker.data_root }}",
+  "storage-driver": "{{ docker.storage_driver }}",
+  "log-driver": "{{ docker.log_driver }}",
+  "log-opts": {
+    "max-size": "{{ docker.log_max_size }}",
+    "max-file": "{{ docker.log_max_file }}"
+  },
+{% if docker.nvidia_runtime | default(true) %}
+  "runtimes": {
+    "nvidia": {
+      "path": "nvidia-container-runtime",
+      "runtimeArgs": []
+    }
+  },
+  "default-runtime": "nvidia",
+{% endif %}
+  "features": {
+    "buildkit": {{ docker.buildkit | lower }}
+  },
+  "exec-opts": ["native.cgroupdriver=systemd"],
+  "live-restore": true
+}

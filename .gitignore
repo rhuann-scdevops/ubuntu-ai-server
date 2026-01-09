@@ -1,0 +1,76 @@
+# =============================================================================
+# Ubuntu AI Server - Git Ignore
+# =============================================================================
+
+# Ansible
+*.retry
+/ansible/inventory/hosts.yml
+!/ansible/inventory/hosts.yml.example
+.ansible/
+
+# Secrets and credentials
+*.vault
+*.vault.yml
+*vault*.yml
+secrets.yml
+credentials.yml
+passwords.yml
+.env
+.env.*
+!.env.example
+
+# SSH keys
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+authorized_keys
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+.venv/
+*.egg-info/
+
+# Logs
+*.log
+logs/
+
+# Build artifacts
+dist/
+build/
+*.tar.gz
+*.zip
+
+# IDE
+.idea/
+.vscode/
+*.sublime-*
+
+# Ansible facts cache
+/tmp/ansible_facts/
+
+# Docker compose overrides with secrets
+docker-compose.override.yml
+docker-compose.local.yml
+
+# OS specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

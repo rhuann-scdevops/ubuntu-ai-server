@@ -1,0 +1,9 @@
+---
+# =============================================================================
+# Base System Handlers
+# =============================================================================
+
+- name: reboot server
+  ansible.builtin.reboot:
+    reboot_timeout: 300
+    msg: "Rebooting for system updates"

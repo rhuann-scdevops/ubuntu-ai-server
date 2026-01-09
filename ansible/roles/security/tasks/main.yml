@@ -1,0 +1,211 @@
+---
+# =============================================================================
+# Security Hardening
+# =============================================================================
+# Configures UFW firewall, fail2ban, and SSH hardening
+# =============================================================================
+
+# =============================================================================
+# UFW Firewall
+# =============================================================================
+- name: Install UFW
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+  when: security.firewall.enabled
+
+- name: Reset UFW to default
+  community.general.ufw:
+    state: reset
+  when: security.firewall.enabled
+
+- name: Set default UFW policies
+  community.general.ufw:
+    direction: "{{ item.direction }}"
+    policy: "{{ item.policy }}"
+  loop:
+    - { direction: 'incoming', policy: 'deny' }
+    - { direction: 'outgoing', policy: 'allow' }
+  when: security.firewall.enabled
+
+- name: Allow configured ports through UFW
+  community.general.ufw:
+    rule: allow
+    port: "{{ item.port }}"
+    proto: "{{ item.proto }}"
+    comment: "{{ item.comment }}"
+  loop: "{{ security.firewall.allowed_ports }}"
+  when: security.firewall.enabled
+
+- name: Allow Docker network
+  community.general.ufw:
+    rule: allow
+    src: "{{ docker.default_network }}"
+    comment: "Docker network"
+  when: security.firewall.enabled
+
+- name: Enable UFW
+  community.general.ufw:
+    state: enabled
+  when: security.firewall.enabled
+
+# =============================================================================
+# Fail2ban
+# =============================================================================
+- name: Install fail2ban
+  ansible.builtin.apt:
+    name: fail2ban
+    state: present
+  when: security.fail2ban.enabled
+
+- name: Configure fail2ban jail.local
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/jail.local
+    content: |
+      [DEFAULT]
+      bantime = {{ security.fail2ban.bantime }}
+      findtime = {{ security.fail2ban.findtime }}
+      maxretry = {{ security.fail2ban.maxretry }}
+      backend = systemd
+
+      [sshd]
+      enabled = true
+      port = {{ security.ssh.port }}
+      filter = sshd
+      logpath = /var/log/auth.log
+      maxretry = {{ security.fail2ban.maxretry }}
+      bantime = {{ security.fail2ban.bantime }}
+
+      [docker-auth]
+      enabled = true
+      port = http,https
+      filter = docker-auth
+      logpath = /var/lib/docker/containers/*/*-json.log
+      maxretry = 5
+      bantime = 3600
+    mode: "0644"
+  notify: restart fail2ban
+  when: security.fail2ban.enabled
+
+- name: Create docker-auth filter for fail2ban
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/filter.d/docker-auth.conf
+    content: |
+      [Definition]
+      failregex = Authentication failure.*from <HOST>
+                  Failed password.*from <HOST>
+      ignoreregex =
+    mode: "0644"
+  notify: restart fail2ban
+  when: security.fail2ban.enabled
+
+- name: Start and enable fail2ban
+  ansible.builtin.systemd:
+    name: fail2ban
+    state: started
+    enabled: true
+  when: security.fail2ban.enabled
+
+# =============================================================================
+# SSH Hardening
+# =============================================================================
+- name: Configure SSH daemon
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    state: present
+    validate: 'sshd -t -f %s'
+  loop:
+    - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin {{ security.ssh.permit_root_login }}' }
+    - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication {{ security.ssh.password_authentication }}' }
+    - { regexp: '^#?Port', line: 'Port {{ security.ssh.port }}' }
+    - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
+    - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
+    - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
+    - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 2' }
+    - { regexp: '^#?AllowAgentForwarding', line: 'AllowAgentForwarding no' }
+    - { regexp: '^#?AllowTcpForwarding', line: 'AllowTcpForwarding no' }
+  notify: restart sshd
+
+# =============================================================================
+# System Hardening
+# =============================================================================
+- name: Disable unused filesystems
+  ansible.builtin.copy:
+    dest: /etc/modprobe.d/disable-filesystems.conf
+    content: |
+      # Disable unused filesystems
+      install cramfs /bin/true
+      install freevxfs /bin/true
+      install jffs2 /bin/true
+      install hfs /bin/true
+      install hfsplus /bin/true
+      install squashfs /bin/true
+      install udf /bin/true
+    mode: "0644"
+
+- name: Set secure permissions on cron directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    owner: root
+    group: root
+    mode: "0700"
+  loop:
+    - /etc/cron.d
+    - /etc/cron.daily
+    - /etc/cron.hourly
+    - /etc/cron.monthly
+    - /etc/cron.weekly
+
+- name: Secure shared memory
+  ansible.posix.mount:
+    path: /run/shm
+    src: tmpfs
+    fstype: tmpfs
+    opts: defaults,noexec,nosuid,nodev
+    state: mounted
+
+# =============================================================================
+# Automatic Security Updates
+# =============================================================================
+- name: Install unattended-upgrades
+  ansible.builtin.apt:
+    name:
+      - unattended-upgrades
+      - apt-listchanges
+    state: present
+
+- name: Enable automatic security updates
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+    mode: "0644"
+
+# =============================================================================
+# Verification
+# =============================================================================
+- name: Check UFW status
+  ansible.builtin.command: ufw status verbose
+  register: ufw_status
+  changed_when: false
+  when: security.firewall.enabled
+
+- name: Display firewall status
+  ansible.builtin.debug:
+    msg: "{{ ufw_status.stdout_lines }}"
+  when: security.firewall.enabled
+
+- name: Check fail2ban status
+  ansible.builtin.command: fail2ban-client status
+  register: fail2ban_status
+  changed_when: false
+  when: security.fail2ban.enabled
+
+- name: Display fail2ban status
+  ansible.builtin.debug:
+    msg: "{{ fail2ban_status.stdout_lines }}"
+  when: security.fail2ban.enabled

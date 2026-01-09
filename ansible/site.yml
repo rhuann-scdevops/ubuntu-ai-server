@@ -1,0 +1,98 @@
+---
+# =============================================================================
+# Ubuntu AI Server - Main Playbook
+# =============================================================================
+# Deploy all components to transform Ubuntu into AI/DevOps powerhouse
+#
+# Usage:
+#   ansible-playbook site.yml                    # Full deployment
+#   ansible-playbook site.yml --tags "base,zfs" # Selective deployment
+#   ansible-playbook site.yml --skip-tags "security"
+# =============================================================================
+
+- name: Ubuntu AI Server - Full Deployment
+  hosts: ai_servers
+  gather_facts: true
+
+  pre_tasks:
+    - name: Display server information
+      ansible.builtin.debug:
+        msg: |
+          ===============================================
+          Deploying to: {{ ansible_hostname }}
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          CPU: {{ ansible_processor[2] }} ({{ ansible_processor_vcpus }} vCPUs)
+          RAM: {{ (ansible_memtotal_mb / 1024) | round(1) }} GB
+          ===============================================
+      tags: always
+
+    - name: Ensure we're running on Ubuntu 24.04
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Ubuntu"
+          - ansible_distribution_major_version == "24"
+        fail_msg: "This playbook requires Ubuntu 24.04 LTS"
+      tags: always
+
+  roles:
+    # Phase 1: Base System
+    - role: base-system
+      tags: [base, phase1]
+
+    # Phase 2: Storage
+    - role: zfs-storage
+      tags: [zfs, storage, phase2]
+
+    # Phase 3: GPU
+    - role: nvidia-cuda
+      tags: [nvidia, gpu, cuda, phase3]
+
+    # Phase 4: Container Runtime
+    - role: docker-setup
+      tags: [docker, containers, phase4]
+
+    # Phase 5: AI Stack
+    - role: ai-stack
+      tags: [ai-stack, ai, ollama, phase5]
+
+    # Phase 6: DevOps Tools
+    - role: devops-tools
+      tags: [devops, devops-tools, phase6]
+
+    # Phase 7: Monitoring
+    - role: monitoring
+      tags: [monitoring, prometheus, grafana, phase7]
+
+    # Phase 8: Backup
+    - role: backup
+      tags: [backup, phase8]
+
+    # Phase 9: Security (can run independently)
+    - role: security
+      tags: [security, hardening, phase9]
+
+  post_tasks:
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg: |
+          ===============================================
+          DEPLOYMENT COMPLETE!
+          ===============================================
+
+          Services available at:
+          - Portainer:  https://{{ server_ip }}:9443
+          - Open WebUI: http://{{ server_ip }}:3000
+          - Gitea:      http://{{ server_ip }}:3001
+          - Grafana:    http://{{ server_ip }}:3002
+          - Ollama API: http://{{ server_ip }}:11434
+          - Prometheus: http://{{ server_ip }}:9090
+          - Traefik:    http://{{ server_ip }}:8080
+
+          GPU Status:
+            nvidia-smi
+
+          ZFS Pools:
+            zpool status
+
+          ===============================================
+      tags: always

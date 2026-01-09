@@ -1,0 +1,187 @@
+---
+# =============================================================================
+# DevOps Tools Deployment
+# =============================================================================
+# Deploys: Portainer, Traefik, Gitea, Drone CI, Harbor
+# =============================================================================
+
+- name: Create DevOps stack directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ devops_stack.portainer.data_path }}"
+    - "{{ devops_stack.traefik.config_path }}"
+    - "{{ devops_stack.gitea.data_path }}"
+    - /opt/docker-compose/devops-stack
+
+# =============================================================================
+# Portainer - Container Management
+# =============================================================================
+- name: Deploy Portainer container
+  community.docker.docker_container:
+    name: portainer
+    image: portainer/portainer-ce:latest
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ devops_stack.portainer.port }}:9443"
+      - "9000:9000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - "{{ devops_stack.portainer.data_path }}:/data"
+    networks:
+      - name: ai-network
+  when: devops_stack.portainer.enabled
+
+# =============================================================================
+# Traefik - Reverse Proxy
+# =============================================================================
+- name: Create Traefik configuration
+  ansible.builtin.template:
+    src: traefik.yml.j2
+    dest: "{{ devops_stack.traefik.config_path }}/traefik.yml"
+    mode: "0644"
+  when: devops_stack.traefik.enabled
+
+- name: Create Traefik dynamic configuration directory
+  ansible.builtin.file:
+    path: "{{ devops_stack.traefik.config_path }}/dynamic"
+    state: directory
+    mode: "0755"
+  when: devops_stack.traefik.enabled
+
+- name: Create Traefik acme.json for SSL
+  ansible.builtin.file:
+    path: "{{ devops_stack.traefik.config_path }}/acme.json"
+    state: touch
+    mode: "0600"
+  when: devops_stack.traefik.enabled
+
+- name: Deploy Traefik container
+  community.docker.docker_container:
+    name: traefik
+    image: traefik:v3.0
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ devops_stack.traefik.http_port }}:80"
+      - "{{ devops_stack.traefik.https_port }}:443"
+      - "{{ devops_stack.traefik.dashboard_port }}:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - "{{ devops_stack.traefik.config_path }}/traefik.yml:/etc/traefik/traefik.yml:ro"
+      - "{{ devops_stack.traefik.config_path }}/dynamic:/etc/traefik/dynamic:ro"
+      - "{{ devops_stack.traefik.config_path }}/acme.json:/acme.json"
+    networks:
+      - name: ai-network
+  when: devops_stack.traefik.enabled
+
+# =============================================================================
+# Gitea - Self-hosted Git
+# =============================================================================
+- name: Create Gitea directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ devops_stack.gitea.data_path }}/gitea"
+    - "{{ devops_stack.gitea.data_path }}/gitea/conf"
+  when: devops_stack.gitea.enabled
+
+- name: Deploy Gitea container
+  community.docker.docker_container:
+    name: gitea
+    image: gitea/gitea:latest
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ devops_stack.gitea.http_port }}:3000"
+      - "{{ devops_stack.gitea.ssh_port }}:22"
+    volumes:
+      - "{{ devops_stack.gitea.data_path }}:/data"
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    env:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      GITEA__server__ROOT_URL: "http://{{ server_ip }}:{{ devops_stack.gitea.http_port }}/"
+      GITEA__server__SSH_PORT: "{{ devops_stack.gitea.ssh_port }}"
+    networks:
+      - name: ai-network
+  when: devops_stack.gitea.enabled
+
+# =============================================================================
+# Drone CI (Optional)
+# =============================================================================
+- name: Deploy Drone CI container
+  community.docker.docker_container:
+    name: drone
+    image: drone/drone:latest
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ devops_stack.drone.port }}:80"
+    volumes:
+      - "{{ devops_stack.drone.data_path }}:/data"
+    env:
+      DRONE_GITEA_SERVER: "http://gitea:3000"
+      DRONE_SERVER_HOST: "{{ server_ip }}:{{ devops_stack.drone.port }}"
+      DRONE_SERVER_PROTO: "http"
+    networks:
+      - name: ai-network
+  when: devops_stack.drone.enabled
+
+# =============================================================================
+# Harbor Registry (Optional)
+# =============================================================================
+- name: Create Harbor directories
+  ansible.builtin.file:
+    path: "{{ devops_stack.harbor.data_path }}"
+    state: directory
+    mode: "0755"
+  when: devops_stack.harbor.enabled
+
+- name: Note about Harbor installation
+  ansible.builtin.debug:
+    msg: |
+      Harbor requires manual installation due to complexity.
+      Download and run the Harbor installer:
+        wget https://github.com/goharbor/harbor/releases/download/v2.10.0/harbor-online-installer-v2.10.0.tgz
+        tar xzf harbor-online-installer-v2.10.0.tgz
+        cd harbor
+        ./install.sh
+  when: devops_stack.harbor.enabled
+
+# =============================================================================
+# Docker Compose Reference File
+# =============================================================================
+- name: Create DevOps stack docker-compose file
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/docker-compose/devops-stack/docker-compose.yml
+    mode: "0644"
+
+# =============================================================================
+# Verification
+# =============================================================================
+- name: Wait for Portainer to be ready
+  ansible.builtin.uri:
+    url: "https://localhost:{{ devops_stack.portainer.port }}"
+    method: GET
+    validate_certs: false
+  register: portainer_ready
+  until: portainer_ready.status == 200
+  retries: 30
+  delay: 5
+  when: devops_stack.portainer.enabled
+
+- name: Display DevOps services status
+  ansible.builtin.debug:
+    msg: |
+      DevOps Tools Deployed:
+      - Portainer: https://{{ server_ip }}:{{ devops_stack.portainer.port }}
+      - Traefik: http://{{ server_ip }}:{{ devops_stack.traefik.dashboard_port }}
+      - Gitea: http://{{ server_ip }}:{{ devops_stack.gitea.http_port }}

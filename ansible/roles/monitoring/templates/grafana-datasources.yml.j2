@@ -1,0 +1,23 @@
+# =============================================================================
+# Grafana Datasources Provisioning
+# =============================================================================
+
+apiVersion: 1
+
+datasources:
+{% if monitoring.prometheus.enabled %}
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+{% endif %}
+
+{% if monitoring.loki.enabled %}
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+{% endif %}

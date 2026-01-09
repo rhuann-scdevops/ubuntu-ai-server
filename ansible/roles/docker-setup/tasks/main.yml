@@ -1,0 +1,168 @@
+---
+# =============================================================================
+# Docker Installation and Configuration
+# =============================================================================
+# Installs Docker Engine with NVIDIA Container Toolkit for GPU support
+# =============================================================================
+
+- name: Check if Docker is installed
+  ansible.builtin.command: docker --version
+  register: docker_check
+  changed_when: false
+  failed_when: false
+
+# =============================================================================
+# Docker Installation
+# =============================================================================
+- name: Install Docker prerequisites
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+    state: present
+
+- name: Add Docker GPG key
+  ansible.builtin.apt_key:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    state: present
+  when: docker_check.rc != 0
+
+- name: Add Docker repository
+  ansible.builtin.apt_repository:
+    repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+    state: present
+    filename: docker
+    update_cache: true
+  when: docker_check.rc != 0
+
+- name: Install Docker Engine
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+
+# =============================================================================
+# Docker Configuration
+# =============================================================================
+- name: Create Docker config directory
+  ansible.builtin.file:
+    path: /etc/docker
+    state: directory
+    mode: "0755"
+
+- name: Configure Docker daemon
+  ansible.builtin.template:
+    src: daemon.json.j2
+    dest: /etc/docker/daemon.json
+    mode: "0644"
+  notify: restart docker
+
+- name: Ensure Docker data directory exists
+  ansible.builtin.file:
+    path: "{{ docker.data_root }}"
+    state: directory
+    mode: "0755"
+
+# =============================================================================
+# NVIDIA Container Toolkit
+# =============================================================================
+- name: Check if NVIDIA Container Toolkit is installed
+  ansible.builtin.command: nvidia-container-cli --version
+  register: nvidia_toolkit_check
+  changed_when: false
+  failed_when: false
+
+- name: Add NVIDIA Container Toolkit repository key
+  ansible.builtin.apt_key:
+    url: https://nvidia.github.io/libnvidia-container/gpgkey
+    state: present
+  when:
+    - docker.nvidia_runtime | default(true)
+    - nvidia_toolkit_check.rc != 0
+
+- name: Add NVIDIA Container Toolkit repository
+  ansible.builtin.apt_repository:
+    repo: "deb https://nvidia.github.io/libnvidia-container/stable/deb/$(ARCH) /"
+    state: present
+    filename: nvidia-container-toolkit
+    update_cache: true
+  when:
+    - docker.nvidia_runtime | default(true)
+    - nvidia_toolkit_check.rc != 0
+
+- name: Install NVIDIA Container Toolkit
+  ansible.builtin.apt:
+    name:
+      - nvidia-container-toolkit
+    state: present
+  when: docker.nvidia_runtime | default(true)
+  notify: restart docker
+
+- name: Configure NVIDIA runtime for Docker
+  ansible.builtin.command: nvidia-ctk runtime configure --runtime=docker
+  when: docker.nvidia_runtime | default(true)
+  changed_when: true
+  notify: restart docker
+
+# =============================================================================
+# Docker Service
+# =============================================================================
+- name: Start and enable Docker
+  ansible.builtin.systemd:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Add user to docker group
+  ansible.builtin.user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: true
+  when: ansible_user != 'root'
+
+# =============================================================================
+# Docker Networks
+# =============================================================================
+- name: Create default Docker network
+  community.docker.docker_network:
+    name: ai-network
+    driver: bridge
+    ipam_config:
+      - subnet: "{{ docker.default_network }}"
+
+# =============================================================================
+# Verification
+# =============================================================================
+- name: Verify Docker installation
+  ansible.builtin.command: docker info
+  register: docker_info
+  changed_when: false
+
+- name: Test Docker with hello-world
+  community.docker.docker_container:
+    name: hello-world-test
+    image: hello-world
+    state: started
+    auto_remove: true
+  register: hello_world_test
+
+- name: Test NVIDIA GPU access in Docker
+  ansible.builtin.command: >
+    docker run --rm --gpus all nvidia/cuda:12.2-base-ubuntu22.04 nvidia-smi
+  register: docker_gpu_test
+  changed_when: false
+  failed_when: false
+  when: docker.nvidia_runtime | default(true)
+
+- name: Display Docker GPU test result
+  ansible.builtin.debug:
+    msg: "{{ docker_gpu_test.stdout_lines }}"
+  when:
+    - docker.nvidia_runtime | default(true)
+    - docker_gpu_test.rc == 0

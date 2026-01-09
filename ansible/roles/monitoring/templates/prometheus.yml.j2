@@ -1,0 +1,43 @@
+# =============================================================================
+# Prometheus Configuration
+# =============================================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+rule_files: []
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+{% if monitoring.node_exporter.enabled %}
+  # Node Exporter - System metrics
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels:
+          instance: '{{ server_hostname }}'
+{% endif %}
+
+{% if monitoring.dcgm_exporter.enabled %}
+  # NVIDIA DCGM Exporter - GPU metrics
+  - job_name: 'gpu'
+    static_configs:
+      - targets: ['dcgm-exporter:9400']
+        labels:
+          instance: '{{ server_hostname }}'
+{% endif %}
+
+  # Docker containers via cAdvisor (optional)
+  # - job_name: 'cadvisor'
+  #   static_configs:
+  #     - targets: ['cadvisor:8080']

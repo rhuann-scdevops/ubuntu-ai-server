@@ -1,0 +1,83 @@
+# =============================================================================
+# DevOps Stack - Docker Compose
+# =============================================================================
+# Reference file for manual deployment
+# =============================================================================
+
+version: "3.8"
+
+services:
+{% if devops_stack.portainer.enabled %}
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    restart: unless-stopped
+    ports:
+      - "{{ devops_stack.portainer.port }}:9443"
+      - "9000:9000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - {{ devops_stack.portainer.data_path }}:/data
+    networks:
+      - ai-network
+{% endif %}
+
+{% if devops_stack.traefik.enabled %}
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
+    restart: unless-stopped
+    ports:
+      - "{{ devops_stack.traefik.http_port }}:80"
+      - "{{ devops_stack.traefik.https_port }}:443"
+      - "{{ devops_stack.traefik.dashboard_port }}:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - {{ devops_stack.traefik.config_path }}/traefik.yml:/etc/traefik/traefik.yml:ro
+      - {{ devops_stack.traefik.config_path }}/dynamic:/etc/traefik/dynamic:ro
+      - {{ devops_stack.traefik.config_path }}/acme.json:/acme.json
+    networks:
+      - ai-network
+{% endif %}
+
+{% if devops_stack.gitea.enabled %}
+  gitea:
+    image: gitea/gitea:latest
+    container_name: gitea
+    restart: unless-stopped
+    ports:
+      - "{{ devops_stack.gitea.http_port }}:3000"
+      - "{{ devops_stack.gitea.ssh_port }}:22"
+    volumes:
+      - {{ devops_stack.gitea.data_path }}:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+    networks:
+      - ai-network
+{% endif %}
+
+{% if devops_stack.drone.enabled %}
+  drone:
+    image: drone/drone:latest
+    container_name: drone
+    restart: unless-stopped
+    ports:
+      - "{{ devops_stack.drone.port }}:80"
+    volumes:
+      - {{ devops_stack.drone.data_path }}:/data
+    environment:
+      - DRONE_GITEA_SERVER=http://gitea:3000
+      - DRONE_SERVER_HOST={{ server_ip }}:{{ devops_stack.drone.port }}
+      - DRONE_SERVER_PROTO=http
+    depends_on:
+      - gitea
+    networks:
+      - ai-network
+{% endif %}
+
+networks:
+  ai-network:
+    external: true

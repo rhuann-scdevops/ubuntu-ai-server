@@ -1,0 +1,22 @@
+---
+# =============================================================================
+# NVIDIA CUDA Handlers
+# =============================================================================
+
+- name: update initramfs
+  ansible.builtin.command: update-initramfs -u
+
+- name: reboot for nvidia
+  ansible.builtin.reboot:
+    reboot_timeout: 300
+    msg: "Rebooting after NVIDIA driver installation"
+
+- name: update ldconfig
+  ansible.builtin.command: ldconfig
+
+- name: enable nvidia persistence
+  ansible.builtin.systemd:
+    name: nvidia-persistenced
+    state: started
+    enabled: true
+    daemon_reload: true

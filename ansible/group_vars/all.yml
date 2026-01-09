@@ -1,0 +1,262 @@
+---
+# =============================================================================
+# Ubuntu AI Server - Global Variables
+# =============================================================================
+
+# =============================================================================
+# Server Information
+# =============================================================================
+server_hostname: "rhuan-lab-srv02"
+server_domain: "home.arpa"
+server_fqdn: "{{ server_hostname }}.{{ server_domain }}"
+server_ip: "192.168.0.101"
+server_timezone: "America/Sao_Paulo"
+
+# =============================================================================
+# Storage Configuration
+# =============================================================================
+# ZFS Fast Pool (SSDs) - For containers, databases, AI models
+zfs_fast_pool:
+  name: "fast-pool"
+  type: "mirror"
+  disks:
+    - "/dev/sda"
+    - "/dev/sdb"
+  options:
+    compression: "lz4"
+    atime: "off"
+    xattr: "sa"
+    acltype: "posixacl"
+  datasets:
+    - name: "docker"
+      mountpoint: "/fast-pool/docker"
+      quota: "100G"
+    - name: "databases"
+      mountpoint: "/fast-pool/databases"
+      quota: "50G"
+      recordsize: "8K"  # Optimized for databases
+    - name: "ai-models"
+      mountpoint: "/fast-pool/ai-models"
+      quota: "200G"
+
+# ZFS Bulk Pool (HDDs) - For datasets, backups, media
+zfs_bulk_pool:
+  name: "bulk-pool"
+  type: "mirror"
+  disks:
+    - "/dev/sdc"
+    - "/dev/sdd"
+  options:
+    compression: "lz4"
+    atime: "off"
+  datasets:
+    - name: "datasets"
+      mountpoint: "/bulk-pool/datasets"
+      quota: "500G"
+    - name: "backups"
+      mountpoint: "/bulk-pool/backups"
+      quota: "500G"
+    - name: "media"
+      mountpoint: "/bulk-pool/media"
+
+# =============================================================================
+# NVIDIA / CUDA Configuration
+# =============================================================================
+nvidia:
+  driver_version: "550"  # Latest stable driver
+  cuda_version: "12.4"
+  cudnn_version: "8"
+  gpu_model: "Quadro P4000"
+  compute_capability: "6.1"  # Pascal architecture
+
+# =============================================================================
+# Docker Configuration
+# =============================================================================
+docker:
+  storage_driver: "overlay2"
+  data_root: "/fast-pool/docker"
+  log_driver: "json-file"
+  log_max_size: "100m"
+  log_max_file: "3"
+  default_network: "172.18.0.0/16"
+
+  # Enable BuildKit
+  buildkit: true
+
+  # GPU runtime
+  nvidia_runtime: true
+
+# =============================================================================
+# AI Stack Configuration
+# =============================================================================
+ai_stack:
+  # Ollama - Local LLM inference
+  ollama:
+    enabled: true
+    port: 11434
+    models_path: "/fast-pool/ai-models/ollama"
+    default_models:
+      - "llama3.2:8b"
+      - "codellama:13b"
+      - "mistral:7b"
+      - "nomic-embed-text"
+
+  # Open WebUI - Chat interface
+  open_webui:
+    enabled: true
+    port: 3000
+    data_path: "/fast-pool/docker/open-webui"
+
+  # ComfyUI - Stable Diffusion
+  comfyui:
+    enabled: true
+    port: 8188
+    models_path: "/fast-pool/ai-models/comfyui"
+
+  # LocalAI - OpenAI compatible API
+  localai:
+    enabled: false
+    port: 8080
+    models_path: "/fast-pool/ai-models/localai"
+
+# =============================================================================
+# DevOps Stack Configuration
+# =============================================================================
+devops_stack:
+  # Portainer - Container management
+  portainer:
+    enabled: true
+    port: 9443
+    data_path: "/fast-pool/docker/portainer"
+
+  # Traefik - Reverse proxy
+  traefik:
+    enabled: true
+    http_port: 80
+    https_port: 443
+    dashboard_port: 8080
+    config_path: "/fast-pool/docker/traefik"
+
+  # Gitea - Self-hosted Git
+  gitea:
+    enabled: true
+    http_port: 3001
+    ssh_port: 2222
+    data_path: "/fast-pool/docker/gitea"
+
+  # Drone CI
+  drone:
+    enabled: false
+    port: 8000
+    data_path: "/fast-pool/docker/drone"
+
+  # Harbor - Container registry
+  harbor:
+    enabled: false
+    port: 5000
+    data_path: "/bulk-pool/docker/harbor"
+
+# =============================================================================
+# Monitoring Stack Configuration
+# =============================================================================
+monitoring:
+  # Prometheus
+  prometheus:
+    enabled: true
+    port: 9090
+    retention: "30d"
+    data_path: "/fast-pool/docker/prometheus"
+
+  # Grafana
+  grafana:
+    enabled: true
+    port: 3002
+    admin_password: "ChangeMe!"
+    data_path: "/fast-pool/docker/grafana"
+
+  # Loki - Log aggregation
+  loki:
+    enabled: true
+    port: 3100
+    data_path: "/bulk-pool/docker/loki"
+
+  # Node Exporter
+  node_exporter:
+    enabled: true
+    port: 9100
+
+  # NVIDIA DCGM Exporter
+  dcgm_exporter:
+    enabled: true
+    port: 9400
+
+# =============================================================================
+# Backup Configuration
+# =============================================================================
+backup:
+  # ZFS snapshots
+  zfs_snapshots:
+    enabled: true
+    schedule: "0 2 * * *"  # Daily at 2 AM
+    retention_days: 7
+
+  # Remote backup (optional)
+  remote:
+    enabled: false
+    target: ""
+    schedule: "0 4 * * 0"  # Weekly on Sunday at 4 AM
+
+# =============================================================================
+# Security Configuration
+# =============================================================================
+security:
+  # Firewall (UFW)
+  firewall:
+    enabled: true
+    default_policy: "deny"
+    allowed_ports:
+      - { port: 22, proto: "tcp", comment: "SSH" }
+      - { port: 80, proto: "tcp", comment: "HTTP" }
+      - { port: 443, proto: "tcp", comment: "HTTPS" }
+      - { port: 3000, proto: "tcp", comment: "Open WebUI" }
+      - { port: 3001, proto: "tcp", comment: "Gitea" }
+      - { port: 3002, proto: "tcp", comment: "Grafana" }
+      - { port: 8080, proto: "tcp", comment: "Traefik Dashboard" }
+      - { port: 9090, proto: "tcp", comment: "Prometheus" }
+      - { port: 9443, proto: "tcp", comment: "Portainer" }
+      - { port: 11434, proto: "tcp", comment: "Ollama" }
+
+  # Fail2ban
+  fail2ban:
+    enabled: true
+    bantime: 3600
+    findtime: 600
+    maxretry: 5
+
+  # SSH hardening
+  ssh:
+    permit_root_login: "no"
+    password_authentication: "yes"  # Change to "no" after setting up keys
+    port: 22
+
+# =============================================================================
+# System Packages
+# =============================================================================
+base_packages:
+  - htop
+  - iotop
+  - iftop
+  - ncdu
+  - tmux
+  - vim
+  - curl
+  - wget
+  - git
+  - jq
+  - tree
+  - unzip
+  - net-tools
+  - dnsutils
+  - nfs-common
+  - python3-pip
+  - python3-venv
