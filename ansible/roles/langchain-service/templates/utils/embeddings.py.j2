@@ -1,0 +1,49 @@
+"""
+Embeddings Utilities
+Helper functions for text embeddings.
+"""
+from typing import List
+from functools import lru_cache
+from langchain_ollama import OllamaEmbeddings
+
+from config import get_settings
+
+
+@lru_cache()
+def get_embeddings_model(model_name: str = None) -> OllamaEmbeddings:
+    """Get a cached embeddings model."""
+    settings = get_settings()
+    return OllamaEmbeddings(
+        base_url=settings.ollama_url,
+        model=model_name or settings.default_embedding_model
+    )
+
+
+async def embed_text(text: str, model_name: str = None) -> List[float]:
+    """Generate embeddings for a single text."""
+    embeddings = get_embeddings_model(model_name)
+    return await embeddings.aembed_query(text)
+
+
+async def embed_documents(
+    texts: List[str],
+    model_name: str = None
+) -> List[List[float]]:
+    """Generate embeddings for multiple texts."""
+    embeddings = get_embeddings_model(model_name)
+    return await embeddings.aembed_documents(texts)
+
+
+def embed_text_sync(text: str, model_name: str = None) -> List[float]:
+    """Synchronously generate embeddings for a single text."""
+    embeddings = get_embeddings_model(model_name)
+    return embeddings.embed_query(text)
+
+
+def embed_documents_sync(
+    texts: List[str],
+    model_name: str = None
+) -> List[List[float]]:
+    """Synchronously generate embeddings for multiple texts."""
+    embeddings = get_embeddings_model(model_name)
+    return embeddings.embed_documents(texts)

@@ -1,0 +1,22 @@
+"""
+Utility functions for the LangChain service.
+"""
+from .vectorstore import (
+    get_vectorstore,
+    create_collection,
+    list_collections,
+)
+from .embeddings import (
+    get_embeddings_model,
+    embed_text,
+    embed_documents,
+)
+
+__all__ = [
+    "get_vectorstore",
+    "create_collection",
+    "list_collections",
+    "get_embeddings_model",
+    "embed_text",
+    "embed_documents",
+]

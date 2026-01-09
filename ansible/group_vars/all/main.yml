@@ -240,6 +240,8 @@ security:
       # Docs Generator ports
       - { port: 8088, proto: "tcp", comment: "MkDocs Site" }
       - { port: 8089, proto: "tcp", comment: "Docs API" }
+      # LangChain Service
+      - { port: 8002, proto: "tcp", comment: "LangChain API" }
 
   # Fail2ban
   fail2ban:
@@ -557,3 +559,35 @@ docs_generator:
     auto_commit: true
     branch: "main"
     commit_message_prefix: "[docs-gen]"
+
+# =============================================================================
+# LangChain Service Configuration
+# =============================================================================
+# Unified LangChain API service for RAG pipelines, autonomous agents,
+# and conversation management. Integrates with Qdrant and Ollama.
+# =============================================================================
+langchain_service:
+  enabled: true
+  version: "latest"
+  port: 8002
+  data_path: "/fast-pool/docker/langchain"
+
+  # Model configurations - uses models from Ollama
+  default_chat_model: "llama3.2:3b"
+  default_code_model: "codellama:13b"
+  default_embedding_model: "nomic-embed-text"
+  noc_expert_model: "llama3.2:3b"  # Use general model as fallback
+
+  # RAG Configuration
+  chunk_size: 1000
+  chunk_overlap: 200
+  retrieval_k: 5
+
+  # Memory Configuration
+  memory_type: "buffer"  # buffer, buffer_window, summary, summary_buffer
+  memory_k: 10           # For buffer_window
+  max_token_limit: 4000  # For summary memory
+
+  # Agent Configuration
+  agent_max_iterations: 15
+  agent_timeout: 120

@@ -1,0 +1,118 @@
+"""
+LangChain Service Configuration
+Central configuration for all LangChain components.
+Adapted for Qdrant vector store.
+"""
+import os
+from typing import Optional
+from pydantic_settings import BaseSettings
+from functools import lru_cache
+
+
+class Settings(BaseSettings):
+    """Application settings with environment variable support."""
+
+    # Service Configuration
+    service_name: str = "langchain-service"
+    service_host: str = "0.0.0.0"
+    service_port: int = 8002
+    debug: bool = False
+
+    # Ollama Configuration
+    ollama_host: str = "localhost"
+    ollama_port: int = 11434
+    ollama_base_url: Optional[str] = None
+
+    # Default Models
+    default_chat_model: str = "{{ langchain_service.default_chat_model }}"
+    default_code_model: str = "{{ langchain_service.default_code_model }}"
+    default_embedding_model: str = "{{ langchain_service.default_embedding_model }}"
+    noc_expert_model: str = "{{ langchain_service.noc_expert_model }}"
+
+    # Qdrant Configuration
+    qdrant_host: str = "localhost"
+    qdrant_port: int = 6333
+    qdrant_grpc_port: int = 6334
+    qdrant_collection_prefix: str = "langchain_"
+
+    # RAG Configuration
+    chunk_size: int = 1000
+    chunk_overlap: int = 200
+    retrieval_k: int = 5
+
+    # Memory Configuration
+    memory_type: str = "buffer"  # buffer, summary, buffer_window
+    memory_k: int = 10  # For buffer_window
+    max_token_limit: int = 4000  # For summary memory
+
+    # Agent Configuration
+    agent_max_iterations: int = 15
+    agent_timeout: int = 120
+
+    # External Services
+    doc_processor_url: str = "http://localhost:8085"
+
+    @property
+    def ollama_url(self) -> str:
+        """Get the full Ollama URL."""
+        if self.ollama_base_url:
+            return self.ollama_base_url
+        return f"http://{self.ollama_host}:{self.ollama_port}"
+
+    @property
+    def qdrant_url(self) -> str:
+        """Get the full Qdrant URL."""
+        return f"http://{self.qdrant_host}:{self.qdrant_port}"
+
+    class Config:
+        env_prefix = "LANGCHAIN_"
+        env_file = ".env"
+        extra = "ignore"
+
+
+@lru_cache()
+def get_settings() -> Settings:
+    """Get cached settings instance."""
+    return Settings()
+
+
+# Model configurations for different use cases
+MODEL_CONFIGS = {
+    "general": {
+        "model": "{{ langchain_service.default_chat_model }}",
+        "temperature": 0.7,
+        "description": "General purpose conversations"
+    },
+    "code": {
+        "model": "{{ langchain_service.default_code_model }}",
+        "temperature": 0.2,
+        "description": "Code generation and analysis"
+    },
+    "noc": {
+        "model": "{{ langchain_service.noc_expert_model }}",
+        "temperature": 0.3,
+        "description": "NOC technical assistance"
+    },
+    "reasoning": {
+        "model": "mistral:7b",
+        "temperature": 0.1,
+        "description": "Complex reasoning tasks"
+    },
+    "fast": {
+        "model": "{{ langchain_service.default_chat_model }}",
+        "temperature": 0.5,
+        "description": "Quick responses for simple tasks"
+    }
+}
+
+# Collection mappings
+COLLECTION_MAPPINGS = {
+    "manuals": "langchain_manuals",
+    "confluence": "langchain_confluence",
+    "logs": "langchain_logs",
+    "configs": "langchain_configs",
+    "pcap": "langchain_pcap",
+    "code": "langchain_code",
+    "conversations": "langchain_conversations",
+    "general": "langchain_general"
+}

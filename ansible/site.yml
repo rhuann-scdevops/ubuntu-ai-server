@@ -79,6 +79,10 @@
     - role: rag-stack
       tags: [rag, rag-stack, vector-db, phase11]
 
+    # Phase 11b: LangChain Service (RAG API + Agents)
+    - role: langchain-service
+      tags: [langchain, langchain-service, rag-api, phase11]
+
     # Phase 12: n8n Workflow Automation
     - role: n8n
       tags: [n8n, automation, workflows, phase12]
@@ -111,6 +115,7 @@
           - Docling API:  http://{{ server_ip }}:{{ rag_stack.docling.port }}
           - Interpreter:  http://{{ server_ip }}:{{ rag_stack.interpreter.port }}
           - Ingestion:    http://{{ server_ip }}:{{ rag_stack.ingestion.port }}
+          - LangChain:    http://{{ server_ip }}:{{ langchain_service.port | default(8002) }}
 
           Automation:
           - n8n:          http://{{ server_ip }}:{{ n8n.port }}

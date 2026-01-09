@@ -1,0 +1,241 @@
+---
+# =============================================================================
+# LangChain Service Deployment
+# =============================================================================
+# Deploys LangChain service with Qdrant vector store integration
+# =============================================================================
+
+- name: Display LangChain service deployment info
+  ansible.builtin.debug:
+    msg: |
+      ===============================================
+      Deploying LangChain Service
+      - API Port: {{ langchain_service.port }}
+      - Vector DB: Qdrant ({{ rag_stack.qdrant.port }})
+      - Ollama: {{ server_ip }}:{{ ai_stack.ollama.port }}
+      ===============================================
+  when: langchain_service.enabled
+
+# =============================================================================
+# Directory Setup
+# =============================================================================
+
+- name: Create LangChain service directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ langchain_service.data_path }}"
+    - "{{ langchain_service.data_path }}/build"
+    - "{{ langchain_service.data_path }}/conversations"
+  when: langchain_service.enabled
+
+# =============================================================================
+# Deploy Application Files
+# =============================================================================
+
+- name: Deploy LangChain service main application
+  ansible.builtin.template:
+    src: main.py.j2
+    dest: "{{ langchain_service.data_path }}/build/main.py"
+    mode: "0644"
+  when: langchain_service.enabled
+
+- name: Deploy LangChain service configuration
+  ansible.builtin.template:
+    src: config.py.j2
+    dest: "{{ langchain_service.data_path }}/build/config.py"
+    mode: "0644"
+  when: langchain_service.enabled
+
+- name: Deploy requirements.txt
+  ansible.builtin.template:
+    src: requirements.txt.j2
+    dest: "{{ langchain_service.data_path }}/build/requirements.txt"
+    mode: "0644"
+  when: langchain_service.enabled
+
+- name: Deploy Dockerfile
+  ansible.builtin.template:
+    src: Dockerfile.j2
+    dest: "{{ langchain_service.data_path }}/build/Dockerfile"
+    mode: "0644"
+  when: langchain_service.enabled
+
+# Deploy Python modules
+- name: Create Python package directories
+  ansible.builtin.file:
+    path: "{{ langchain_service.data_path }}/build/{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - chains
+    - agents
+    - tools
+    - memory
+    - utils
+  when: langchain_service.enabled
+
+- name: Deploy chains modules
+  ansible.builtin.template:
+    src: "chains/{{ item }}.j2"
+    dest: "{{ langchain_service.data_path }}/build/chains/{{ item }}"
+    mode: "0644"
+  loop:
+    - __init__.py
+    - rag_chain.py
+    - qa_chain.py
+    - summary_chain.py
+  when: langchain_service.enabled
+
+- name: Deploy agents modules
+  ansible.builtin.template:
+    src: "agents/{{ item }}.j2"
+    dest: "{{ langchain_service.data_path }}/build/agents/{{ item }}"
+    mode: "0644"
+  loop:
+    - __init__.py
+    - devops_agent.py
+    - noc_agent.py
+  when: langchain_service.enabled
+
+- name: Deploy tools modules
+  ansible.builtin.template:
+    src: "tools/{{ item }}.j2"
+    dest: "{{ langchain_service.data_path }}/build/tools/{{ item }}"
+    mode: "0644"
+  loop:
+    - __init__.py
+    - devops_tools.py
+    - network_tools.py
+    - knowledge_tools.py
+  when: langchain_service.enabled
+
+- name: Deploy memory modules
+  ansible.builtin.template:
+    src: "memory/{{ item }}.j2"
+    dest: "{{ langchain_service.data_path }}/build/memory/{{ item }}"
+    mode: "0644"
+  loop:
+    - __init__.py
+    - conversation_memory.py
+  when: langchain_service.enabled
+
+- name: Deploy utils modules
+  ansible.builtin.template:
+    src: "utils/{{ item }}.j2"
+    dest: "{{ langchain_service.data_path }}/build/utils/{{ item }}"
+    mode: "0644"
+  loop:
+    - __init__.py
+    - vectorstore.py
+    - embeddings.py
+  when: langchain_service.enabled
+
+# =============================================================================
+# Build and Deploy Container
+# =============================================================================
+
+- name: Build LangChain service Docker image
+  community.docker.docker_image:
+    name: langchain-service
+    tag: latest
+    source: build
+    build:
+      path: "{{ langchain_service.data_path }}/build"
+      dockerfile: Dockerfile
+    force_source: true
+  when: langchain_service.enabled
+
+- name: Deploy LangChain service container
+  community.docker.docker_container:
+    name: langchain-service
+    image: langchain-service:latest
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "{{ langchain_service.port }}:8002"
+    volumes:
+      - "{{ langchain_service.data_path }}/conversations:/tmp/langchain_conversations:rw"
+    env:
+      # Service Configuration
+      LANGCHAIN_SERVICE_HOST: "0.0.0.0"
+      LANGCHAIN_SERVICE_PORT: "8002"
+      LANGCHAIN_DEBUG: "false"
+      # Ollama Configuration
+      LANGCHAIN_OLLAMA_HOST: "{{ server_ip }}"
+      LANGCHAIN_OLLAMA_PORT: "{{ ai_stack.ollama.port | string }}"
+      # Qdrant Configuration
+      LANGCHAIN_QDRANT_HOST: "{{ server_ip }}"
+      LANGCHAIN_QDRANT_PORT: "{{ rag_stack.qdrant.port | string }}"
+      LANGCHAIN_QDRANT_GRPC_PORT: "{{ rag_stack.qdrant.grpc_port | string }}"
+      # Models
+      LANGCHAIN_DEFAULT_CHAT_MODEL: "{{ langchain_service.default_chat_model }}"
+      LANGCHAIN_DEFAULT_CODE_MODEL: "{{ langchain_service.default_code_model }}"
+      LANGCHAIN_DEFAULT_EMBEDDING_MODEL: "{{ langchain_service.default_embedding_model }}"
+      LANGCHAIN_NOC_EXPERT_MODEL: "{{ langchain_service.noc_expert_model }}"
+      # RAG Configuration
+      LANGCHAIN_CHUNK_SIZE: "{{ langchain_service.chunk_size | string }}"
+      LANGCHAIN_CHUNK_OVERLAP: "{{ langchain_service.chunk_overlap | string }}"
+      LANGCHAIN_RETRIEVAL_K: "{{ langchain_service.retrieval_k | string }}"
+      # Memory Configuration
+      LANGCHAIN_MEMORY_TYPE: "{{ langchain_service.memory_type }}"
+      LANGCHAIN_MEMORY_K: "{{ langchain_service.memory_k | string }}"
+      LANGCHAIN_MAX_TOKEN_LIMIT: "{{ langchain_service.max_token_limit | string }}"
+      # Agent Configuration
+      LANGCHAIN_AGENT_MAX_ITERATIONS: "{{ langchain_service.agent_max_iterations | string }}"
+      LANGCHAIN_AGENT_TIMEOUT: "{{ langchain_service.agent_timeout | string }}"
+    networks:
+      - name: ai-network
+    labels:
+      traefik.enable: "false"
+  when: langchain_service.enabled
+
+# =============================================================================
+# Health Check
+# =============================================================================
+
+- name: Wait for LangChain service to be healthy
+  ansible.builtin.uri:
+    url: "http://{{ server_ip }}:{{ langchain_service.port }}/health"
+    method: GET
+    status_code: 200
+  register: langchain_health
+  until: langchain_health.status == 200
+  retries: 10
+  delay: 5
+  ignore_errors: yes
+  when: langchain_service.enabled
+
+# =============================================================================
+# Summary
+# =============================================================================
+
+- name: Display LangChain service deployment summary
+  ansible.builtin.debug:
+    msg: |
+      ===============================================
+      LangChain Service Deployment Complete!
+      ===============================================
+
+      Endpoints:
+      - Health: http://{{ server_ip }}:{{ langchain_service.port }}/health
+      - Info: http://{{ server_ip }}:{{ langchain_service.port }}/info
+      - Chat: POST http://{{ server_ip }}:{{ langchain_service.port }}/chat
+      - RAG Query: POST http://{{ server_ip }}:{{ langchain_service.port }}/rag/query
+      - Agent: POST http://{{ server_ip }}:{{ langchain_service.port }}/agent/run
+
+      Integration:
+      - Ollama: http://{{ server_ip }}:{{ ai_stack.ollama.port }}
+      - Qdrant: http://{{ server_ip }}:{{ rag_stack.qdrant.port }}
+
+      Models:
+      - Chat: {{ langchain_service.default_chat_model }}
+      - Code: {{ langchain_service.default_code_model }}
+      - Embeddings: {{ langchain_service.default_embedding_model }}
+
+      ===============================================
+  when: langchain_service.enabled

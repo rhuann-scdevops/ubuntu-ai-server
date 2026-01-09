@@ -1,0 +1,239 @@
+"""
+RAG (Retrieval Augmented Generation) Chains
+Chains for document-based Q&A with context retrieval.
+Adapted for Qdrant vector store.
+"""
+from typing import Optional, List, Dict, Any
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough, RunnableParallel
+from langchain_core.documents import Document
+from langchain_ollama import ChatOllama
+from langchain_qdrant import QdrantVectorStore
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains.retrieval import create_retrieval_chain
+from langchain.chains.history_aware_retriever import create_history_aware_retriever
+
+from config import get_settings, MODEL_CONFIGS
+
+
+class RAGChain:
+    """RAG Chain for document-based question answering with Qdrant."""
+
+    def __init__(
+        self,
+        vectorstore: QdrantVectorStore,
+        model_name: Optional[str] = None,
+        temperature: float = 0.3,
+        k: int = 5
+    ):
+        self.settings = get_settings()
+        self.vectorstore = vectorstore
+        self.model_name = model_name or self.settings.default_chat_model
+        self.temperature = temperature
+        self.k = k
+
+        self.llm = ChatOllama(
+            base_url=self.settings.ollama_url,
+            model=self.model_name,
+            temperature=self.temperature
+        )
+
+        self.retriever = vectorstore.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": self.k}
+        )
+
+        self.chain = self._build_chain()
+
+    def _build_chain(self):
+        """Build the RAG chain with prompt template."""
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are a helpful AI assistant with access to a knowledge base.
+Use the following context to answer the user's question accurately.
+If the context doesn't contain relevant information, say so clearly.
+Always cite your sources when possible.
+
+Context:
+{context}"""),
+            ("human", "{input}")
+        ])
+
+        document_chain = create_stuff_documents_chain(self.llm, prompt)
+        return create_retrieval_chain(self.retriever, document_chain)
+
+    async def ainvoke(self, question: str) -> Dict[str, Any]:
+        """Async invoke the RAG chain."""
+        result = await self.chain.ainvoke({"input": question})
+        return {
+            "answer": result["answer"],
+            "sources": [
+                {
+                    "content": doc.page_content[:500],
+                    "metadata": doc.metadata
+                }
+                for doc in result.get("context", [])
+            ]
+        }
+
+    def invoke(self, question: str) -> Dict[str, Any]:
+        """Sync invoke the RAG chain."""
+        result = self.chain.invoke({"input": question})
+        return {
+            "answer": result["answer"],
+            "sources": [
+                {
+                    "content": doc.page_content[:500],
+                    "metadata": doc.metadata
+                }
+                for doc in result.get("context", [])
+            ]
+        }
+
+
+def create_rag_chain(
+    vectorstore: QdrantVectorStore,
+    model_config: str = "general",
+    k: int = 5
+) -> RAGChain:
+    """Factory function to create a RAG chain with predefined model config."""
+    config = MODEL_CONFIGS.get(model_config, MODEL_CONFIGS["general"])
+    return RAGChain(
+        vectorstore=vectorstore,
+        model_name=config["model"],
+        temperature=config["temperature"],
+        k=k
+    )
+
+
+class ConversationalRAGChain:
+    """Conversational RAG chain with chat history support."""
+
+    def __init__(
+        self,
+        vectorstore: QdrantVectorStore,
+        model_name: Optional[str] = None,
+        temperature: float = 0.3,
+        k: int = 5
+    ):
+        self.settings = get_settings()
+        self.vectorstore = vectorstore
+        self.model_name = model_name or self.settings.default_chat_model
+        self.temperature = temperature
+        self.k = k
+
+        self.llm = ChatOllama(
+            base_url=self.settings.ollama_url,
+            model=self.model_name,
+            temperature=self.temperature
+        )
+
+        self.retriever = vectorstore.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": self.k}
+        )
+
+        self.chain = self._build_chain()
+
+    def _build_chain(self):
+        """Build the conversational RAG chain."""
+        contextualize_q_prompt = ChatPromptTemplate.from_messages([
+            ("system", """Given a chat history and the latest user question,
+formulate a standalone question that can be understood without the chat history.
+Do NOT answer the question, just reformulate it if needed."""),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}")
+        ])
+
+        history_aware_retriever = create_history_aware_retriever(
+            self.llm, self.retriever, contextualize_q_prompt
+        )
+
+        qa_prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are a helpful AI assistant with access to a knowledge base.
+Use the following context to answer the user's question accurately.
+If the context doesn't contain relevant information, say so clearly.
+
+Context:
+{context}"""),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}")
+        ])
+
+        question_answer_chain = create_stuff_documents_chain(self.llm, qa_prompt)
+        return create_retrieval_chain(history_aware_retriever, question_answer_chain)
+
+    async def ainvoke(
+        self,
+        question: str,
+        chat_history: List[tuple] = None
+    ) -> Dict[str, Any]:
+        """Async invoke with chat history."""
+        from langchain_core.messages import HumanMessage, AIMessage
+
+        history = []
+        if chat_history:
+            for human, ai in chat_history:
+                history.append(HumanMessage(content=human))
+                history.append(AIMessage(content=ai))
+
+        result = await self.chain.ainvoke({
+            "input": question,
+            "chat_history": history
+        })
+
+        return {
+            "answer": result["answer"],
+            "sources": [
+                {
+                    "content": doc.page_content[:500],
+                    "metadata": doc.metadata
+                }
+                for doc in result.get("context", [])
+            ]
+        }
+
+    def invoke(
+        self,
+        question: str,
+        chat_history: List[tuple] = None
+    ) -> Dict[str, Any]:
+        """Sync invoke with chat history."""
+        from langchain_core.messages import HumanMessage, AIMessage
+
+        history = []
+        if chat_history:
+            for human, ai in chat_history:
+                history.append(HumanMessage(content=human))
+                history.append(AIMessage(content=ai))
+
+        result = self.chain.invoke({
+            "input": question,
+            "chat_history": history
+        })
+
+        return {
+            "answer": result["answer"],
+            "sources": [
+                {
+                    "content": doc.page_content[:500],
+                    "metadata": doc.metadata
+                }
+                for doc in result.get("context", [])
+            ]
+        }
+
+
+def create_conversational_rag_chain(
+    vectorstore: QdrantVectorStore,
+    model_config: str = "general",
+    k: int = 5
+) -> ConversationalRAGChain:
+    """Factory function to create a conversational RAG chain."""
+    config = MODEL_CONFIGS.get(model_config, MODEL_CONFIGS["general"])
+    return ConversationalRAGChain(
+        vectorstore=vectorstore,
+        model_name=config["model"],
+        temperature=config["temperature"],
+        k=k
+    )

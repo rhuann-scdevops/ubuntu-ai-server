@@ -1,0 +1,472 @@
+"""
+LangChain Service - FastAPI Application
+Unified API for LangChain chains, agents, and RAG pipelines.
+Adapted for Qdrant vector store.
+"""
+import uuid
+from typing import Optional, List, Dict, Any
+from datetime import datetime
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+import structlog
+
+from config import get_settings, MODEL_CONFIGS, COLLECTION_MAPPINGS
+from chains import (
+    create_rag_chain,
+    create_conversational_rag_chain,
+    create_qa_chain,
+    create_summary_chain,
+)
+from agents import create_devops_agent, create_noc_agent
+from memory import MemoryManager, ConversationStore, create_memory
+from utils import get_vectorstore, list_collections, create_collection
+
+# Configure logging
+structlog.configure(
+    processors=[
+        structlog.stdlib.filter_by_level,
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.JSONRenderer()
+    ],
+    wrapper_class=structlog.stdlib.BoundLogger,
+    context_class=dict,
+    logger_factory=structlog.stdlib.LoggerFactory(),
+)
+logger = structlog.get_logger()
+
+# Initialize settings
+settings = get_settings()
+
+# Session storage for conversation memory
+sessions: Dict[str, MemoryManager] = {}
+conversation_store = ConversationStore()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan manager."""
+    logger.info("Starting LangChain Service", version="1.0.0")
+    yield
+    logger.info("Shutting down LangChain Service")
+
+
+app = FastAPI(
+    title="LangChain Service",
+    description="""
+    Unified LangChain API for Ubuntu AI Server.
+
+    Features:
+    - RAG chains for document Q&A
+    - Conversational chains with memory
+    - DevOps and NOC agents
+    - Multiple LLM model configurations
+    - Qdrant vector store integration
+    """,
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ============================================================================
+# Request/Response Models
+# ============================================================================
+
+class ChatRequest(BaseModel):
+    """Chat request model."""
+    message: str = Field(..., description="User message")
+    session_id: Optional[str] = Field(None, description="Session ID for conversation continuity")
+    model_config_name: str = Field("general", description="Model configuration to use")
+
+
+class ChatResponse(BaseModel):
+    """Chat response model."""
+    response: str
+    session_id: str
+    model_used: str
+
+
+class RAGRequest(BaseModel):
+    """RAG query request model."""
+    question: str = Field(..., description="Question to answer")
+    collection: str = Field("langchain_general", description="Collection to search")
+    model_config_name: str = Field("general", description="Model configuration")
+    k: int = Field(5, description="Number of documents to retrieve")
+    chat_history: Optional[List[List[str]]] = Field(None, description="Optional chat history")
+
+
+class RAGResponse(BaseModel):
+    """RAG query response model."""
+    answer: str
+    sources: List[Dict[str, Any]]
+    model_used: str
+
+
+class AgentRequest(BaseModel):
+    """Agent task request model."""
+    task: str = Field(..., description="Task for the agent to perform")
+    agent_type: str = Field("devops", description="Agent type: devops or noc")
+    session_id: Optional[str] = Field(None, description="Session ID for conversation continuity")
+    verbose: bool = Field(False, description="Whether to include detailed steps")
+
+
+class AgentResponse(BaseModel):
+    """Agent task response model."""
+    output: str
+    steps: List[Dict[str, Any]]
+    session_id: str
+
+
+class SummaryRequest(BaseModel):
+    """Summary request model."""
+    content: str = Field(..., description="Content to summarize")
+    summary_type: str = Field("general", description="Type: general, log, config, technical, incident")
+    model_config_name: str = Field("general", description="Model configuration")
+
+
+class SummaryResponse(BaseModel):
+    """Summary response model."""
+    summary: str
+    content_length: int
+    model_used: str
+
+
+# ============================================================================
+# Health & Info Endpoints
+# ============================================================================
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {
+        "status": "healthy",
+        "service": "langchain-service",
+        "timestamp": datetime.utcnow().isoformat(),
+        "ollama_url": settings.ollama_url,
+        "qdrant_url": settings.qdrant_url
+    }
+
+
+@app.get("/info")
+async def service_info():
+    """Get service information."""
+    return {
+        "service": "langchain-service",
+        "version": "1.0.0",
+        "model_configs": MODEL_CONFIGS,
+        "collection_mappings": COLLECTION_MAPPINGS,
+        "default_models": {
+            "chat": settings.default_chat_model,
+            "code": settings.default_code_model,
+            "embedding": settings.default_embedding_model,
+            "noc": settings.noc_expert_model
+        }
+    }
+
+
+@app.get("/collections")
+async def get_collections():
+    """List all available collections."""
+    try:
+        collections = list_collections()
+        return {"collections": collections}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Chat Endpoints
+# ============================================================================
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """
+    Simple chat endpoint with conversation memory.
+
+    Uses the Q&A chain for general conversation.
+    """
+    try:
+        # Get or create session
+        session_id = request.session_id or str(uuid.uuid4())
+        if session_id not in sessions:
+            sessions[session_id] = create_memory("buffer")
+
+        memory = sessions[session_id]
+
+        # Get chat history
+        chat_history = memory.get_history_as_tuples()
+
+        # Create chain and invoke
+        chain = create_qa_chain(model_config=request.model_config_name)
+
+        # Build context from history
+        context = ""
+        if chat_history:
+            context = "\n".join([f"Human: {h}\nAI: {a}" for h, a in chat_history[-3:]])
+            context = f"\nPrevious conversation:\n{context}\n\n"
+
+        full_message = context + request.message if context else request.message
+        response = await chain.ainvoke(full_message)
+
+        # Save to memory
+        memory.add_message(request.message, response)
+
+        config = MODEL_CONFIGS.get(request.model_config_name, MODEL_CONFIGS["general"])
+        return ChatResponse(
+            response=response,
+            session_id=session_id,
+            model_used=config["model"]
+        )
+
+    except Exception as e:
+        logger.error("Chat error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/chat/{session_id}")
+async def clear_session(session_id: str):
+    """Clear a chat session."""
+    if session_id in sessions:
+        sessions[session_id].clear()
+        del sessions[session_id]
+        return {"status": "cleared", "session_id": session_id}
+    raise HTTPException(status_code=404, detail="Session not found")
+
+
+# ============================================================================
+# RAG Endpoints
+# ============================================================================
+
+@app.post("/rag/query", response_model=RAGResponse)
+async def rag_query(request: RAGRequest):
+    """
+    Query the knowledge base using RAG.
+
+    Retrieves relevant documents and generates an answer.
+    """
+    try:
+        # Get vectorstore
+        vectorstore = get_vectorstore(request.collection)
+
+        # Create appropriate chain
+        if request.chat_history:
+            chain = create_conversational_rag_chain(
+                vectorstore=vectorstore,
+                model_config=request.model_config_name,
+                k=request.k
+            )
+            # Convert chat history format
+            history = [(h[0], h[1]) for h in request.chat_history]
+            result = await chain.ainvoke(request.question, chat_history=history)
+        else:
+            chain = create_rag_chain(
+                vectorstore=vectorstore,
+                model_config=request.model_config_name,
+                k=request.k
+            )
+            result = await chain.ainvoke(request.question)
+
+        config = MODEL_CONFIGS.get(request.model_config_name, MODEL_CONFIGS["general"])
+        return RAGResponse(
+            answer=result["answer"],
+            sources=result["sources"],
+            model_used=config["model"]
+        )
+
+    except Exception as e:
+        logger.error("RAG query error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Agent Endpoints
+# ============================================================================
+
+@app.post("/agent/run", response_model=AgentResponse)
+async def run_agent(request: AgentRequest):
+    """
+    Run a DevOps or NOC agent task.
+
+    Agents can use tools to gather information and perform actions.
+    """
+    try:
+        # Get or create session
+        session_id = request.session_id or str(uuid.uuid4())
+        if session_id not in sessions:
+            sessions[session_id] = create_memory("buffer")
+
+        memory = sessions[session_id]
+        chat_history = memory.get_history_as_tuples()
+
+        # Create appropriate agent
+        if request.agent_type == "noc":
+            agent = create_noc_agent(verbose=request.verbose)
+        else:
+            agent = create_devops_agent(verbose=request.verbose)
+
+        # Run agent
+        result = await agent.ainvoke(request.task, chat_history=chat_history)
+
+        # Save to memory
+        memory.add_message(request.task, result["output"])
+
+        return AgentResponse(
+            output=result["output"],
+            steps=result["intermediate_steps"] if request.verbose else [],
+            session_id=session_id
+        )
+
+    except Exception as e:
+        logger.error("Agent error", error=str(e), agent_type=request.agent_type)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/agent/noc/troubleshoot")
+async def noc_troubleshoot(issue: str):
+    """
+    Specialized NOC troubleshooting endpoint.
+
+    Performs structured troubleshooting for network issues.
+    """
+    try:
+        agent = create_noc_agent(verbose=True)
+        result = await agent.troubleshoot(issue)
+        return result
+    except Exception as e:
+        logger.error("NOC troubleshoot error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Summary Endpoints
+# ============================================================================
+
+@app.post("/summary", response_model=SummaryResponse)
+async def summarize(request: SummaryRequest):
+    """
+    Summarize content using LangChain.
+
+    Supports different summary types for various content.
+    """
+    try:
+        chain = create_summary_chain(
+            summary_type=request.summary_type,
+            model_config=request.model_config_name
+        )
+
+        summary = await chain.asummarize(
+            request.content,
+            prompt_type=request.summary_type
+        )
+
+        config = MODEL_CONFIGS.get(request.model_config_name, MODEL_CONFIGS["general"])
+        return SummaryResponse(
+            summary=summary,
+            content_length=len(request.content),
+            model_used=config["model"]
+        )
+
+    except Exception as e:
+        logger.error("Summary error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/summary/log")
+async def summarize_log(log_content: str):
+    """
+    Specialized log analysis endpoint.
+
+    Analyzes logs and provides structured insights.
+    """
+    try:
+        from chains.summary_chain import LogSummaryChain
+        chain = LogSummaryChain()
+        result = await chain.analyze_logs(log_content)
+        return result
+    except Exception as e:
+        logger.error("Log summary error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/summary/config")
+async def summarize_config(config_content: str, config_type: str = "generic"):
+    """
+    Specialized configuration analysis endpoint.
+
+    Analyzes configurations and provides insights.
+    """
+    try:
+        from chains.summary_chain import ConfigSummaryChain
+        chain = ConfigSummaryChain()
+        result = await chain.analyze_config(config_content, config_type)
+        return result
+    except Exception as e:
+        logger.error("Config summary error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Conversation History Endpoints
+# ============================================================================
+
+@app.get("/conversations")
+async def list_conversations():
+    """List all stored conversations."""
+    return {"conversations": conversation_store.list_conversations()}
+
+
+@app.get("/conversations/{session_id}")
+async def get_conversation(session_id: str):
+    """Get a specific conversation."""
+    conv = conversation_store.load_conversation(session_id)
+    if conv:
+        return conv
+    raise HTTPException(status_code=404, detail="Conversation not found")
+
+
+@app.post("/conversations/{session_id}/save")
+async def save_conversation(session_id: str):
+    """Save current session to persistent storage."""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    memory = sessions[session_id]
+    messages = [
+        {"role": "human" if i % 2 == 0 else "ai", "content": msg.content}
+        for i, msg in enumerate(memory.get_history())
+    ]
+
+    conversation_store.save_conversation(
+        session_id=session_id,
+        messages=messages,
+        metadata={"saved_at": datetime.utcnow().isoformat()}
+    )
+
+    return {"status": "saved", "session_id": session_id}
+
+
+# ============================================================================
+# Main Entry Point
+# ============================================================================
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "main:app",
+        host=settings.service_host,
+        port=settings.service_port,
+        reload=settings.debug
+    )

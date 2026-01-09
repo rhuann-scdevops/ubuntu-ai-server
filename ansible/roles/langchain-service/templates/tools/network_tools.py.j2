@@ -1,0 +1,185 @@
+"""
+Network Tools for LangChain Agents
+Tools for network diagnostics and automation.
+"""
+import asyncio
+import subprocess
+import socket
+from typing import Optional, Type
+from pydantic import BaseModel, Field
+from langchain_core.tools import BaseTool
+
+
+class PingInput(BaseModel):
+    """Input for Ping tool."""
+    host: str = Field(description="Hostname or IP address to ping")
+    count: int = Field(default=4, description="Number of ping packets to send")
+
+
+class PingTool(BaseTool):
+    """Tool for pinging hosts to check connectivity."""
+
+    name: str = "ping"
+    description: str = """Ping a host to check network connectivity.
+Use this to verify if a host is reachable and measure latency."""
+    args_schema: Type[BaseModel] = PingInput
+
+    def _run(self, host: str, count: int = 4) -> str:
+        """Execute ping command."""
+        try:
+            result = subprocess.run(
+                ["ping", "-c", str(count), host],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if result.returncode == 0:
+                return f"Ping successful:\n{result.stdout}"
+            else:
+                return f"Ping failed:\n{result.stderr or result.stdout}"
+        except subprocess.TimeoutExpired:
+            return f"Ping to {host} timed out"
+        except Exception as e:
+            return f"Error pinging {host}: {str(e)}"
+
+    async def _arun(self, host: str, count: int = 4) -> str:
+        """Async execute ping command."""
+        return await asyncio.to_thread(self._run, host, count)
+
+
+class DNSLookupInput(BaseModel):
+    """Input for DNS Lookup tool."""
+    hostname: str = Field(description="Hostname to look up")
+    record_type: str = Field(default="A", description="DNS record type (A, AAAA, MX, NS, TXT)")
+
+
+class DNSLookupTool(BaseTool):
+    """Tool for DNS lookups."""
+
+    name: str = "dns_lookup"
+    description: str = """Perform DNS lookup for a hostname.
+Supports A, AAAA, MX, NS, and TXT record types."""
+    args_schema: Type[BaseModel] = DNSLookupInput
+
+    def _run(self, hostname: str, record_type: str = "A") -> str:
+        """Execute DNS lookup."""
+        try:
+            result = subprocess.run(
+                ["dig", "+short", record_type, hostname],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            output = result.stdout.strip()
+            if output:
+                return f"DNS {record_type} record for {hostname}:\n{output}"
+            else:
+                return f"No {record_type} records found for {hostname}"
+        except FileNotFoundError:
+            try:
+                ip = socket.gethostbyname(hostname)
+                return f"Resolved {hostname} to {ip}"
+            except socket.gaierror as e:
+                return f"DNS lookup failed for {hostname}: {str(e)}"
+        except Exception as e:
+            return f"Error looking up {hostname}: {str(e)}"
+
+    async def _arun(self, hostname: str, record_type: str = "A") -> str:
+        """Async execute DNS lookup."""
+        return await asyncio.to_thread(self._run, hostname, record_type)
+
+
+class PortScanInput(BaseModel):
+    """Input for Port Scan tool."""
+    host: str = Field(description="Hostname or IP address to scan")
+    ports: str = Field(default="22,80,443", description="Comma-separated list of ports to check")
+
+
+class PortScanTool(BaseTool):
+    """Tool for checking if ports are open on a host."""
+
+    name: str = "port_scan"
+    description: str = """Check if specific ports are open on a host.
+Input ports as comma-separated values (e.g., '22,80,443')."""
+    args_schema: Type[BaseModel] = PortScanInput
+
+    def _run(self, host: str, ports: str = "22,80,443") -> str:
+        """Check ports on host."""
+        port_list = [int(p.strip()) for p in ports.split(",")]
+        results = []
+
+        for port in port_list:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(3)
+                result = sock.connect_ex((host, port))
+                sock.close()
+
+                if result == 0:
+                    results.append(f"Port {port}: OPEN")
+                else:
+                    results.append(f"Port {port}: CLOSED")
+            except socket.gaierror:
+                results.append(f"Port {port}: HOST NOT FOUND")
+            except socket.timeout:
+                results.append(f"Port {port}: TIMEOUT")
+            except Exception as e:
+                results.append(f"Port {port}: ERROR ({str(e)})")
+
+        return f"Port scan results for {host}:\n" + "\n".join(results)
+
+    async def _arun(self, host: str, ports: str = "22,80,443") -> str:
+        """Async port scan."""
+        return await asyncio.to_thread(self._run, host, ports)
+
+
+class SSHCommandInput(BaseModel):
+    """Input for SSH Command tool."""
+    host: str = Field(description="SSH host (user@hostname or just hostname)")
+    command: str = Field(description="Command to execute on remote host")
+    timeout: int = Field(default=30, description="Command timeout in seconds")
+
+
+class SSHCommandTool(BaseTool):
+    """Tool for executing commands on remote hosts via SSH."""
+
+    name: str = "ssh_command"
+    description: str = """Execute a command on a remote host via SSH.
+Requires SSH key-based authentication to be configured.
+WARNING: Be careful with commands that modify system state."""
+    args_schema: Type[BaseModel] = SSHCommandInput
+
+    allowed_commands: list = [
+        "uptime", "df", "free", "top -bn1", "ps aux", "netstat", "ss",
+        "ip addr", "ip route", "cat /etc/os-release", "hostname",
+        "systemctl status", "docker ps", "kubectl get"
+    ]
+
+    def _is_safe_command(self, command: str) -> bool:
+        """Check if command is in allowed list."""
+        cmd_lower = command.lower().strip()
+        return any(cmd_lower.startswith(allowed) for allowed in self.allowed_commands)
+
+    def _run(self, host: str, command: str, timeout: int = 30) -> str:
+        """Execute SSH command."""
+        if not self._is_safe_command(command):
+            return f"Command not allowed for safety: {command}"
+
+        try:
+            result = subprocess.run(
+                ["ssh", "-o", "StrictHostKeyChecking=no",
+                 "-o", "ConnectTimeout=10", host, command],
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+            output = result.stdout or result.stderr
+            return f"SSH command output from {host}:\n{output}"
+        except subprocess.TimeoutExpired:
+            return f"SSH command timed out on {host}"
+        except Exception as e:
+            return f"SSH error on {host}: {str(e)}"
+
+    async def _arun(self, host: str, command: str, timeout: int = 30) -> str:
+        """Async SSH command execution."""
+        return await asyncio.to_thread(self._run, host, command, timeout)

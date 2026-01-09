@@ -1,0 +1,192 @@
+"""
+Conversation Memory Management
+Memory implementations for maintaining conversation context.
+"""
+from typing import Optional, Dict, Any, List
+from datetime import datetime
+import json
+from pathlib import Path
+
+from langchain.memory import (
+    ConversationBufferMemory,
+    ConversationBufferWindowMemory,
+    ConversationSummaryMemory,
+    ConversationSummaryBufferMemory,
+)
+from langchain_ollama import ChatOllama
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
+
+from config import get_settings
+
+
+class MemoryManager:
+    """Memory manager for conversation context."""
+
+    def __init__(
+        self,
+        memory_type: str = "buffer",
+        memory_key: str = "chat_history",
+        **kwargs
+    ):
+        self.settings = get_settings()
+        self.memory_type = memory_type
+        self.memory_key = memory_key
+        self.kwargs = kwargs
+
+        self.memory = self._create_memory()
+
+    def _create_memory(self):
+        """Create the appropriate memory instance."""
+        if self.memory_type == "buffer":
+            return ConversationBufferMemory(
+                memory_key=self.memory_key,
+                return_messages=True
+            )
+
+        elif self.memory_type == "buffer_window":
+            k = self.kwargs.get("k", self.settings.memory_k)
+            return ConversationBufferWindowMemory(
+                memory_key=self.memory_key,
+                return_messages=True,
+                k=k
+            )
+
+        elif self.memory_type == "summary":
+            llm = ChatOllama(
+                base_url=self.settings.ollama_url,
+                model=self.settings.default_chat_model,
+                temperature=0
+            )
+            return ConversationSummaryMemory(
+                memory_key=self.memory_key,
+                return_messages=True,
+                llm=llm
+            )
+
+        elif self.memory_type == "summary_buffer":
+            llm = ChatOllama(
+                base_url=self.settings.ollama_url,
+                model=self.settings.default_chat_model,
+                temperature=0
+            )
+            max_token_limit = self.kwargs.get(
+                "max_token_limit",
+                self.settings.max_token_limit
+            )
+            return ConversationSummaryBufferMemory(
+                memory_key=self.memory_key,
+                return_messages=True,
+                llm=llm,
+                max_token_limit=max_token_limit
+            )
+
+        else:
+            raise ValueError(f"Unknown memory type: {self.memory_type}")
+
+    def add_message(self, human_input: str, ai_output: str):
+        """Add a conversation exchange to memory."""
+        self.memory.save_context(
+            {"input": human_input},
+            {"output": ai_output}
+        )
+
+    def get_history(self) -> List[BaseMessage]:
+        """Get conversation history as messages."""
+        return self.memory.load_memory_variables({})[self.memory_key]
+
+    def get_history_as_tuples(self) -> List[tuple]:
+        """Get conversation history as list of (human, ai) tuples."""
+        messages = self.get_history()
+        history = []
+        for i in range(0, len(messages) - 1, 2):
+            if i + 1 < len(messages):
+                human = messages[i].content if isinstance(messages[i], HumanMessage) else ""
+                ai = messages[i + 1].content if isinstance(messages[i + 1], AIMessage) else ""
+                history.append((human, ai))
+        return history
+
+    def clear(self):
+        """Clear conversation history."""
+        self.memory.clear()
+
+    def get_buffer_string(self) -> str:
+        """Get formatted conversation history as string."""
+        messages = self.get_history()
+        lines = []
+        for msg in messages:
+            role = "Human" if isinstance(msg, HumanMessage) else "AI"
+            lines.append(f"{role}: {msg.content}")
+        return "\n".join(lines)
+
+
+class ConversationStore:
+    """Persistent conversation storage."""
+
+    def __init__(self, storage_path: str = "/tmp/langchain_conversations"):
+        self.storage_path = Path(storage_path)
+        self.storage_path.mkdir(parents=True, exist_ok=True)
+
+    def save_conversation(
+        self,
+        session_id: str,
+        messages: List[Dict[str, str]],
+        metadata: Optional[Dict[str, Any]] = None
+    ):
+        """Save a conversation to storage."""
+        conversation = {
+            "session_id": session_id,
+            "timestamp": datetime.utcnow().isoformat(),
+            "messages": messages,
+            "metadata": metadata or {}
+        }
+
+        file_path = self.storage_path / f"{session_id}.json"
+        with open(file_path, "w") as f:
+            json.dump(conversation, f, indent=2)
+
+    def load_conversation(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Load a conversation from storage."""
+        file_path = self.storage_path / f"{session_id}.json"
+        if file_path.exists():
+            with open(file_path, "r") as f:
+                return json.load(f)
+        return None
+
+    def list_conversations(self) -> List[Dict[str, Any]]:
+        """List all stored conversations."""
+        conversations = []
+        for file_path in self.storage_path.glob("*.json"):
+            try:
+                with open(file_path, "r") as f:
+                    data = json.load(f)
+                    conversations.append({
+                        "session_id": data["session_id"],
+                        "timestamp": data["timestamp"],
+                        "message_count": len(data["messages"]),
+                        "metadata": data.get("metadata", {})
+                    })
+            except Exception:
+                continue
+        return sorted(conversations, key=lambda x: x["timestamp"], reverse=True)
+
+    def delete_conversation(self, session_id: str) -> bool:
+        """Delete a conversation from storage."""
+        file_path = self.storage_path / f"{session_id}.json"
+        if file_path.exists():
+            file_path.unlink()
+            return True
+        return False
+
+
+def create_memory(
+    memory_type: str = None,
+    **kwargs
+) -> MemoryManager:
+    """Factory function to create a memory manager."""
+    settings = get_settings()
+    memory_type = memory_type or settings.memory_type
+
+    return MemoryManager(
+        memory_type=memory_type,
+        **kwargs
+    )

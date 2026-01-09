@@ -1,0 +1,215 @@
+"""
+DevOps Tools for LangChain Agents
+Tools for container management, service monitoring, and system administration.
+"""
+import asyncio
+import subprocess
+import os
+from pathlib import Path
+from typing import Optional, Type
+from pydantic import BaseModel, Field
+from langchain_core.tools import BaseTool
+
+
+class DockerStatusInput(BaseModel):
+    """Input for Docker Status tool."""
+    filter_name: Optional[str] = Field(default=None, description="Optional container name filter")
+
+
+class DockerStatusTool(BaseTool):
+    """Tool for checking Docker container status."""
+
+    name: str = "docker_status"
+    description: str = """Check the status of Docker containers.
+Use this to see running containers, their health, and resource usage.
+Optionally filter by container name."""
+    args_schema: Type[BaseModel] = DockerStatusInput
+
+    def _run(self, filter_name: Optional[str] = None) -> str:
+        """Get Docker container status."""
+        try:
+            cmd = ["docker", "ps", "-a", "--format",
+                   "table {% raw %}{{.Names}}\t{{.Status}}\t{{.Ports}}\t{{.Image}}{% endraw %}"]
+
+            if filter_name:
+                cmd.extend(["--filter", f"name={filter_name}"])
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+            if result.returncode == 0:
+                return f"Docker containers:\n{result.stdout}"
+            else:
+                return f"Docker error: {result.stderr}"
+        except FileNotFoundError:
+            return "Docker CLI not found. Is Docker installed?"
+        except Exception as e:
+            return f"Error checking Docker status: {str(e)}"
+
+    async def _arun(self, filter_name: Optional[str] = None) -> str:
+        """Async get Docker status."""
+        return await asyncio.to_thread(self._run, filter_name)
+
+
+class ServiceStatusInput(BaseModel):
+    """Input for Service Status tool."""
+    service_name: str = Field(description="Name of the systemd service to check")
+
+
+class ServiceStatusTool(BaseTool):
+    """Tool for checking systemd service status."""
+
+    name: str = "service_status"
+    description: str = """Check the status of a systemd service.
+Use this to verify if a service is running, stopped, or failed."""
+    args_schema: Type[BaseModel] = ServiceStatusInput
+
+    def _run(self, service_name: str) -> str:
+        """Get service status."""
+        try:
+            status_result = subprocess.run(
+                ["systemctl", "status", service_name, "--no-pager", "-l"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            output = f"Service: {service_name}\n"
+            output += "-" * 40 + "\n"
+            output += status_result.stdout or status_result.stderr
+
+            return output
+        except FileNotFoundError:
+            return "systemctl not found. This tool requires systemd."
+        except Exception as e:
+            return f"Error checking service {service_name}: {str(e)}"
+
+    async def _arun(self, service_name: str) -> str:
+        """Async get service status."""
+        return await asyncio.to_thread(self._run, service_name)
+
+
+class FileReadInput(BaseModel):
+    """Input for File Read tool."""
+    file_path: str = Field(description="Path to the file to read")
+    lines: int = Field(default=100, description="Number of lines to read")
+
+
+class FileReadTool(BaseTool):
+    """Tool for reading file contents safely."""
+
+    name: str = "file_read"
+    description: str = """Read the contents of a file.
+Use this to examine configuration files, logs, or other text files.
+Only reads files in allowed directories for safety."""
+    args_schema: Type[BaseModel] = FileReadInput
+
+    allowed_paths: list = ["/var/log", "/etc", "/tmp", "/home", "/app", "/opt"]
+
+    def _is_safe_path(self, file_path: str) -> bool:
+        """Check if path is in allowed directories."""
+        try:
+            resolved = Path(file_path).resolve()
+            return any(str(resolved).startswith(allowed) for allowed in self.allowed_paths)
+        except Exception:
+            return False
+
+    def _run(self, file_path: str, lines: int = 100) -> str:
+        """Read file contents."""
+        if not self._is_safe_path(file_path):
+            return f"Access denied: {file_path} is not in allowed directories"
+
+        try:
+            path = Path(file_path)
+            if not path.exists():
+                return f"File not found: {file_path}"
+
+            if not path.is_file():
+                return f"Not a file: {file_path}"
+
+            if path.stat().st_size > 10 * 1024 * 1024:
+                result = subprocess.run(
+                    ["tail", "-n", str(lines), file_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                return f"Last {lines} lines of {file_path}:\n{result.stdout}"
+
+            content = path.read_text()
+            if len(content.split('\n')) > lines:
+                content_lines = content.split('\n')[-lines:]
+                return f"Last {lines} lines of {file_path}:\n" + '\n'.join(content_lines)
+
+            return f"Contents of {file_path}:\n{content}"
+        except PermissionError:
+            return f"Permission denied: {file_path}"
+        except Exception as e:
+            return f"Error reading {file_path}: {str(e)}"
+
+    async def _arun(self, file_path: str, lines: int = 100) -> str:
+        """Async read file."""
+        return await asyncio.to_thread(self._run, file_path, lines)
+
+
+class ShellCommandInput(BaseModel):
+    """Input for Shell Command tool."""
+    command: str = Field(description="Shell command to execute")
+
+
+class ShellCommandTool(BaseTool):
+    """Tool for executing safe shell commands."""
+
+    name: str = "shell_command"
+    description: str = """Execute a shell command for system information gathering.
+Only safe, read-only commands are allowed."""
+    args_schema: Type[BaseModel] = ShellCommandInput
+
+    allowed_commands: list = [
+        "df", "free", "uptime", "whoami", "hostname", "date",
+        "uname", "cat /proc/cpuinfo", "cat /proc/meminfo",
+        "lsb_release", "ip addr", "ip route", "netstat", "ss",
+        "ps", "top -bn1", "which", "whereis", "env",
+        "kubectl get", "docker ps", "docker images",
+        "ansible --version", "python --version", "pip list"
+    ]
+
+    blocked_patterns: list = [
+        "rm ", "mv ", "cp ", "dd ", "mkfs", "fdisk",
+        "chmod", "chown", "sudo", "su ", ">", ">>", "|",
+        ";", "&&", "||", "`", "$(", "wget", "curl -o",
+        "apt", "yum", "dnf", "pacman", "kill", "pkill"
+    ]
+
+    def _is_safe_command(self, command: str) -> bool:
+        """Check if command is safe to execute."""
+        cmd_lower = command.lower().strip()
+
+        for pattern in self.blocked_patterns:
+            if pattern in cmd_lower:
+                return False
+
+        return any(cmd_lower.startswith(allowed.lower()) for allowed in self.allowed_commands)
+
+    def _run(self, command: str) -> str:
+        """Execute shell command."""
+        if not self._is_safe_command(command):
+            return f"Command not allowed: {command}\nOnly read-only commands are permitted."
+
+        try:
+            result = subprocess.run(
+                command.split(),
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd="/tmp"
+            )
+            output = result.stdout or result.stderr
+            return f"Command output:\n{output}"
+        except subprocess.TimeoutExpired:
+            return "Command timed out"
+        except Exception as e:
+            return f"Error executing command: {str(e)}"
+
+    async def _arun(self, command: str) -> str:
+        """Async execute command."""
+        return await asyncio.to_thread(self._run, command)

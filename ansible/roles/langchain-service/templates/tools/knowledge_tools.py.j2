@@ -1,0 +1,196 @@
+"""
+Knowledge Base Tools for LangChain Agents
+Tools for searching and ingesting documents into the knowledge base.
+"""
+import asyncio
+from typing import Optional, Type, List
+import httpx
+from pydantic import BaseModel, Field
+from langchain_core.tools import BaseTool
+
+from config import get_settings
+
+
+class KnowledgeSearchInput(BaseModel):
+    """Input for Knowledge Search tool."""
+    query: str = Field(description="Search query for the knowledge base")
+    collection: Optional[str] = Field(
+        default=None,
+        description="Optional collection to search (manuals, confluence, logs, configs, pcap, general)"
+    )
+    n_results: int = Field(default=5, description="Number of results to return")
+
+
+class KnowledgeSearchTool(BaseTool):
+    """Tool for searching the knowledge base."""
+
+    name: str = "knowledge_search"
+    description: str = """Search the knowledge base for relevant documentation.
+Use this to find information from manuals, confluence articles, logs, configs, etc.
+Available collections: manuals, confluence, logs, configs, pcap, general"""
+    args_schema: Type[BaseModel] = KnowledgeSearchInput
+
+    def _run(
+        self,
+        query: str,
+        collection: Optional[str] = None,
+        n_results: int = 5
+    ) -> str:
+        """Search the knowledge base."""
+        settings = get_settings()
+
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                response = client.post(
+                    f"{settings.doc_processor_url}/search",
+                    json={
+                        "query": query,
+                        "collection": collection,
+                        "n_results": n_results
+                    }
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    return self._format_results(data)
+                else:
+                    return f"Search failed: {response.text}"
+        except httpx.ConnectError:
+            return "Could not connect to document processor service"
+        except Exception as e:
+            return f"Error searching knowledge base: {str(e)}"
+
+    def _format_results(self, data: dict) -> str:
+        """Format search results for display."""
+        output = [f"Search results for: {data.get('query', '')}\n"]
+
+        for collection_result in data.get('results', []):
+            collection_name = collection_result.get('collection', 'unknown')
+            results = collection_result.get('results', [])
+
+            if results:
+                output.append(f"\n## {collection_name}")
+                for i, result in enumerate(results, 1):
+                    text = result.get('text', '')[:500]
+                    metadata = result.get('metadata', {})
+                    source = metadata.get('filename', 'Unknown source')
+                    vendor = metadata.get('vendor', '')
+
+                    output.append(f"\n### Result {i}")
+                    output.append(f"Source: {source}")
+                    if vendor and vendor != 'unknown':
+                        output.append(f"Vendor: {vendor}")
+                    output.append(f"Content: {text}...")
+
+        if len(output) == 1:
+            return "No results found for your query."
+
+        return "\n".join(output)
+
+    async def _arun(
+        self,
+        query: str,
+        collection: Optional[str] = None,
+        n_results: int = 5
+    ) -> str:
+        """Async search the knowledge base."""
+        settings = get_settings()
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{settings.doc_processor_url}/search",
+                    json={
+                        "query": query,
+                        "collection": collection,
+                        "n_results": n_results
+                    }
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    return self._format_results(data)
+                else:
+                    return f"Search failed: {response.text}"
+        except httpx.ConnectError:
+            return "Could not connect to document processor service"
+        except Exception as e:
+            return f"Error searching knowledge base: {str(e)}"
+
+
+class DocumentIngestInput(BaseModel):
+    """Input for Document Ingest tool."""
+    file_path: str = Field(description="Path to the file to ingest")
+    doc_type: str = Field(
+        default="general",
+        description="Document type (manuals, confluence, logs, configs, pcap, general)"
+    )
+    vendor: Optional[str] = Field(default=None, description="Vendor name")
+    product: Optional[str] = Field(default=None, description="Product name")
+    tags: Optional[str] = Field(default=None, description="Comma-separated tags")
+
+
+class DocumentIngestTool(BaseTool):
+    """Tool for ingesting documents into the knowledge base."""
+
+    name: str = "document_ingest"
+    description: str = """Ingest a document into the knowledge base.
+Supported formats: PDF, TXT, MD, YAML, JSON, LOG, HTML"""
+    args_schema: Type[BaseModel] = DocumentIngestInput
+
+    def _run(
+        self,
+        file_path: str,
+        doc_type: str = "general",
+        vendor: Optional[str] = None,
+        product: Optional[str] = None,
+        tags: Optional[str] = None
+    ) -> str:
+        """Ingest a document."""
+        settings = get_settings()
+
+        try:
+            with open(file_path, 'rb') as f:
+                files = {'file': (file_path.split('/')[-1], f)}
+                data = {
+                    'doc_type': doc_type,
+                    'vendor': vendor or '',
+                    'product': product or '',
+                    'tags': tags or ''
+                }
+
+                with httpx.Client(timeout=120.0) as client:
+                    response = client.post(
+                        f"{settings.doc_processor_url}/ingest",
+                        files=files,
+                        data=data
+                    )
+
+                    if response.status_code == 200:
+                        result = response.json()
+                        return f"""Document ingested successfully:
+- Status: {result.get('status')}
+- Document ID: {result.get('document_id')}
+- Chunks created: {result.get('chunks_created')}
+- Collection: {result.get('collection')}"""
+                    else:
+                        return f"Ingest failed: {response.text}"
+        except FileNotFoundError:
+            return f"File not found: {file_path}"
+        except httpx.ConnectError:
+            return "Could not connect to document processor service"
+        except Exception as e:
+            return f"Error ingesting document: {str(e)}"
+
+    async def _arun(
+        self,
+        file_path: str,
+        doc_type: str = "general",
+        vendor: Optional[str] = None,
+        product: Optional[str] = None,
+        tags: Optional[str] = None
+    ) -> str:
+        """Async ingest a document."""
+        return await asyncio.to_thread(
+            self._run, file_path, doc_type, vendor, product, tags
+        )

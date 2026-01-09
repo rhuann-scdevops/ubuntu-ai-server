@@ -1,0 +1,30 @@
+---
+# =============================================================================
+# LangChain Service Defaults
+# =============================================================================
+
+langchain_service:
+  enabled: true
+  version: "latest"
+  port: 8002
+  data_path: "/fast-pool/docker/langchain"
+
+  # Model configurations
+  default_chat_model: "llama3.2:3b"
+  default_code_model: "codellama:13b"
+  default_embedding_model: "nomic-embed-text"
+  noc_expert_model: "llama3.2:3b"  # Use general model as fallback
+
+  # RAG Configuration
+  chunk_size: 1000
+  chunk_overlap: 200
+  retrieval_k: 5
+
+  # Memory Configuration
+  memory_type: "buffer"
+  memory_k: 10
+  max_token_limit: 4000
+
+  # Agent Configuration
+  agent_max_iterations: 15
+  agent_timeout: 120

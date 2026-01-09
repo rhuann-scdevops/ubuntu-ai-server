@@ -1,0 +1,173 @@
+"""
+Vector Store Utilities
+Helper functions for managing Qdrant vector stores.
+"""
+from typing import Optional, List, Dict, Any
+from functools import lru_cache
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import Distance, VectorParams
+from langchain_qdrant import QdrantVectorStore
+from langchain_ollama import OllamaEmbeddings
+
+from config import get_settings, COLLECTION_MAPPINGS
+
+
+@lru_cache()
+def get_qdrant_client() -> QdrantClient:
+    """Get a cached Qdrant client."""
+    settings = get_settings()
+    return QdrantClient(
+        host=settings.qdrant_host,
+        port=settings.qdrant_port,
+        prefer_grpc=False
+    )
+
+
+def get_embeddings():
+    """Get the embeddings model."""
+    settings = get_settings()
+    return OllamaEmbeddings(
+        base_url=settings.ollama_url,
+        model=settings.default_embedding_model
+    )
+
+
+def get_vectorstore(
+    collection_name: str = "langchain_general",
+    create_if_missing: bool = True
+) -> QdrantVectorStore:
+    """
+    Get a LangChain Qdrant vectorstore instance.
+
+    Args:
+        collection_name: Name of the collection
+        create_if_missing: Create collection if it doesn't exist
+
+    Returns:
+        QdrantVectorStore instance
+    """
+    settings = get_settings()
+    embeddings = get_embeddings()
+    client = get_qdrant_client()
+
+    # Check if collection exists
+    collections = [c.name for c in client.get_collections().collections]
+
+    if collection_name not in collections:
+        if create_if_missing:
+            # Create collection with default vector size for nomic-embed-text (768)
+            client.create_collection(
+                collection_name=collection_name,
+                vectors_config=VectorParams(
+                    size=768,  # nomic-embed-text dimension
+                    distance=Distance.COSINE
+                )
+            )
+        else:
+            raise ValueError(f"Collection {collection_name} does not exist")
+
+    return QdrantVectorStore(
+        client=client,
+        collection_name=collection_name,
+        embedding=embeddings
+    )
+
+
+def create_collection(
+    collection_name: str,
+    description: Optional[str] = None,
+    vector_size: int = 768,
+    distance: str = "cosine"
+) -> bool:
+    """
+    Create a new Qdrant collection.
+
+    Args:
+        collection_name: Name for the new collection
+        description: Optional description (stored in metadata)
+        vector_size: Size of embedding vectors (default 768 for nomic-embed-text)
+        distance: Distance metric (cosine, euclid, dot)
+
+    Returns:
+        True if created, False if already exists
+    """
+    client = get_qdrant_client()
+    collections = [c.name for c in client.get_collections().collections]
+
+    if collection_name in collections:
+        return False
+
+    distance_map = {
+        "cosine": Distance.COSINE,
+        "euclid": Distance.EUCLID,
+        "dot": Distance.DOT
+    }
+
+    client.create_collection(
+        collection_name=collection_name,
+        vectors_config=VectorParams(
+            size=vector_size,
+            distance=distance_map.get(distance, Distance.COSINE)
+        )
+    )
+    return True
+
+
+def list_collections() -> List[Dict[str, Any]]:
+    """
+    List all Qdrant collections with their stats.
+
+    Returns:
+        List of collection info dicts
+    """
+    client = get_qdrant_client()
+    collections = []
+
+    for coll in client.get_collections().collections:
+        try:
+            info = client.get_collection(coll.name)
+            collections.append({
+                "name": coll.name,
+                "count": info.points_count,
+                "vectors_count": info.vectors_count,
+                "status": info.status.value if info.status else "unknown"
+            })
+        except Exception as e:
+            collections.append({
+                "name": coll.name,
+                "count": 0,
+                "error": str(e)
+            })
+
+    return collections
+
+
+def delete_collection(collection_name: str) -> bool:
+    """
+    Delete a Qdrant collection.
+
+    Args:
+        collection_name: Name of collection to delete
+
+    Returns:
+        True if deleted, False if not found
+    """
+    client = get_qdrant_client()
+    try:
+        client.delete_collection(collection_name)
+        return True
+    except Exception:
+        return False
+
+
+def get_collection_for_type(doc_type: str) -> str:
+    """
+    Get the collection name for a document type.
+
+    Args:
+        doc_type: Document type (manuals, logs, configs, etc.)
+
+    Returns:
+        Collection name
+    """
+    return COLLECTION_MAPPINGS.get(doc_type, COLLECTION_MAPPINGS["general"])
